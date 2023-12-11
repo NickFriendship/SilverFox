@@ -19,13 +19,6 @@ tab1, tab2 = st.tabs(["Travel method", "New employee"])
 today = date.today()
 today_minus_80 = today - timedelta(weeks=4160)
 
-# Connection details for Azure SQL Database
-server = 'co2emission.database.windows.net'
-database = 'co2project'
-username = 'co2emissionserver@co2emission.database.windows.net'
-password = 'Co2emission'
-driver = '{ODBC Driver 17 for SQL Server}'
-
 # Establish a connection using SQL Server authentication
 conn_str = f'DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password}'
 conn = pyodbc.connect(conn_str)
