@@ -6,3 +6,4 @@ requests
 statistics
 openrouteservice
 pyodbc
+urllib.parse
