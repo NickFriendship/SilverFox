@@ -3,7 +3,6 @@ pandas
 datetime
 folium
 requests
-urllib.parse
 statistics
 openrouteservice
 pyodbc
