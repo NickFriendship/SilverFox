@@ -45,7 +45,7 @@ if submit_button:
         line_chart_data_more = pd.DataFrame(np.random.randn(1, 3), columns=["HRV", "PPM", "Skin Conductance"])
         
         # Append new data to existing DataFrame
-        line_chart_data = pd.concat([line_chart_data, line_chart_data_more])
+        line_chart_data = pd.concat([line_chart_data, line_chart_data_more], ignore_index=True)
 
         with placeholder.container():
             st.line_chart(line_chart_data)
