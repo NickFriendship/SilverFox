@@ -1,9 +1,4 @@
 streamlit
 pandas
-datetime
-folium
-streamlit-folium
-requests
-statistics
-openrouteservice
-pyodbc
+numpy
+time
