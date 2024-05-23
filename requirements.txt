@@ -1,3 +1,9 @@
 streamlit
 pandas
 numpy
+
+pyodbc
+serial
+pyserial
+pyshimmer
+altair
