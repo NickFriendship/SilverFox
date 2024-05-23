@@ -6,6 +6,7 @@ import config
 
 class ShimmerDevice:
     def __init__(self, com_port):
+        self.com_port = com_port
         self.serial = Serial(com_port, DEFAULT_BAUDRATE)
         self.shim_dev = ShimmerBluetooth(self.serial)
         self.shim_dev.initialize()
@@ -21,14 +22,31 @@ class ShimmerDevice:
             uid="team", pwd=config.password)
         self.cursor = self.cnxn.cursor()
 
+        # Updating the shimmer info in the database
+        self.cursor.execute("""MERGE INTO dbo.shimmer AS target
+USING (SELECT ?, ?, ?) AS source (name, port, battery_perc)
+ON (target.name = source.name)
+WHEN MATCHED THEN
+    UPDATE SET target.port = source.port, target.battery_perc = source.battery_perc
+WHEN NOT MATCHED THEN
+    INSERT (name, port, battery_perc)
+    VALUES (source.name, source.port, source.battery_perc)
+OUTPUT INSERTED.id;
+            """,
+                            self.dev_name, self.com_port, self.batt)
+        self.id = self.cursor.fetchone()[0]
+
+        self.cnxn.commit()
+
     def handler(self, pkt: DataPacket):
         timestamp = pkt[EChannelType.TIMESTAMP]
         gsr_raw = pkt[EChannelType.GSR_RAW]
-        print(pkt.channels)
-        print(f'Received new data point at {timestamp}: {gsr_raw}')
+        ppg_raw = pkt[EChannelType.INTERNAL_ADC_13]
+        # print(pkt.channels)
+        # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
-        self.cursor.execute("insert into shimmer_data(sensor_name, data_timestamp, data_gsr_raw) values (?, ?, ?)",
-                            self.dev_name, timestamp, gsr_raw)
+        self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
+                            self.id, timestamp, gsr_raw, ppg_raw)
         self.cnxn.commit()
 
     def start_streaming(self):
@@ -37,3 +55,4 @@ class ShimmerDevice:
     def stop_streaming(self):
         self.shim_dev.stop_streaming()
         self.shim_dev.shutdown()
+        exit(0)
