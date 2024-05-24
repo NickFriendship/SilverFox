@@ -1,4 +1,5 @@
 import pyodbc
+import pandas as pd
 from serial import Serial
 from pyshimmer import ShimmerBluetooth, DEFAULT_BAUDRATE, DataPacket, EChannelType
 import config
@@ -6,6 +7,7 @@ import config
 
 class ShimmerDevice:
     def __init__(self, com_port):
+        self.live_data = pd.DataFrame(columns=['timestamp', 'gsr_raw', 'ppg_raw'])
         self.com_port = com_port
         self.serial = Serial(com_port, DEFAULT_BAUDRATE)
         self.shim_dev = ShimmerBluetooth(self.serial)
@@ -45,9 +47,13 @@ OUTPUT INSERTED.id;
         # print(pkt.channels)
         # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
+        self.live_data = self.live_data.append({'timestamp': timestamp, 'gsr_raw': gsr_raw, 'ppg_raw': ppg_raw}, ignore_index=True)
         self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
                             self.id, timestamp, gsr_raw, ppg_raw)
         self.cnxn.commit()
+
+    def get_live_data(self):
+        return self.live_data
 
     def start_streaming(self):
         self.shim_dev.start_streaming()
@@ -55,4 +61,3 @@ OUTPUT INSERTED.id;
     def stop_streaming(self):
         self.shim_dev.stop_streaming()
         self.shim_dev.shutdown()
-        exit(0)

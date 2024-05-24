@@ -1,52 +1,95 @@
-# Imports
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt
 import time
+from shimmer import ShimmerDevice
+
 
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
 
 # Title
-st.header('MOCK-UP Dashboard - PSV', divider = 'red')
+st.header('Dashboard Mindgames - PSV', divider='red')
 
-# Disable the submit button after it is clicked
-def disable():
-    st.session_state.disabled = True
+# Create tabs
+tab1, tab2, tab3 = st.tabs(["Live monitoring", "Historical HRV", "Historical GSR"])
 
-# Initialize disabled for form_submit_button to False
-if "disabled" not in st.session_state:
-    st.session_state.disabled = False
+with tab1:
+    # Initialize or update session state
+    if "disabled" not in st.session_state:
+        st.session_state.disabled = False
 
-# Create input fields
-with st.form('start_form'):
-    
-    # Add columns
-    col1, col2, col3, col4 = st.columns(4, gap="large")
+    # Form to start monitoring
+    with st.form('start_form'):
+        col1, col2, col3, col4 = st.columns(4, gap="large")
+        with col1:
+            st.selectbox('Game', ("Aristotle", "MoveSense"), index=None)
+        with col2:
+            st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
+        submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True), disabled=st.session_state.disabled)
 
-    with col1:
-        st.selectbox('Game', ("Aristotle", "MoveSense"), index=None)
+    # Annotations setup
+    annotations = [(10, "Speler mist de bal"), (13, "Speler schrikt van onweer"), (19, "Speler moet niezen")]
+    annotations_df = pd.DataFrame(annotations, columns=["index", "event"])
+    annotations_df["y"] = 0
 
-    with col2:
-        st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
+    if submit_button or st.session_state.disabled == True:
 
-    submit_button = st.form_submit_button("Start", on_click=disable, disabled=st.session_state.disabled)
+        # Ping form
+        with st.form('ping_form', clear_on_submit=True):
+            ping_text = st.text_area("Ping text")
+            submit_ping = st.form_submit_button("Send ping")
 
-# Create empty placeholder
-placeholder = st.empty()    
-
-if submit_button:
-    line_chart_data = pd.DataFrame(np.random.randn(20, 3), columns=["HRV", "PPM", "Skin Conductance"])
-    st.toast('Shimmer connected', icon="🎉")
-
-    for seconds in range(200):
-
-        # Generating random data for each second
-        line_chart_data_more = pd.DataFrame(np.random.randn(1, 3), columns=["HRV", "PPM", "Skin Conductance"])
+        if submit_ping:
+            st.session_state.line_chart_data.loc[len(st.session_state.line_chart_data)] = np.random.randn(3)
+            annotations_df = annotations_df.append({'index': len(st.session_state.line_chart_data) - 1, 'event': ping_text, 'y': 0}, ignore_index=True)
+            st.toast('Ping sent', icon="🎉")
         
-        # Append new data to existing DataFrame
-        line_chart_data = pd.concat([line_chart_data, line_chart_data_more], ignore_index=True)
+        colu1, colu2, colu3 = st.columns([1, 1, 0.2])
+        with colu3:
+            stop_button = st.button('Stop streaming', type="primary")
+            if stop_button:
+                st.stop()
+        
+        # SHIMMER TEST
+        device = ShimmerDevice('COM3')
+        device.start_streaming()
 
-        with placeholder.container():
-            st.line_chart(line_chart_data)
-            time.sleep(1)
+        placeholder = st.empty()
+        # Continuous data generation loop
+        for seconds in range(21):
+            if seconds > 0:  # To prevent initial duplicate data generation             
+
+                # Append livestreamed values to DataFrame
+                live_data = device.get_live_data()
+                #annotations_df_tail = annotations_df[annotations_df['index'] >= live_data['index'].min()]
+
+                # Update the line chart
+                base_line_chart = alt.Chart(live_data).transform_fold(
+                    ["gsr_raw", "ppg_raw"],
+                    as_=['Measurement', 'value']
+                ).mark_line().encode(
+                    x='timestamp:T',
+                    y='value:Q',
+                    color='Measurement:N'
+                ).interactive()
+
+                # Update annotations to move with the data
+                #annotation_layer = (
+                #alt.Chart(annotations_df_tail)
+                    #.mark_text(size=25, text="⬇️", dx=0, dy=100, align="center")
+                    #.encode(x="index:Q", y=alt.Y("y:Q"), tooltip=["event"])
+                #)
+
+                # Show chart
+                #combined_chart = base_line_chart + annotation_layer
+
+                with placeholder.container():
+                    st.altair_chart(base_line_chart, theme=None, use_container_width=True)
+                    time.sleep(1)
+                
+                print(live_data)
+                
+            if seconds > 20:
+                    device.stop_streaming()
