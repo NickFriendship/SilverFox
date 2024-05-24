@@ -1,3 +1,5 @@
+import time
+
 import pyodbc
 import pandas as pd
 from serial import Serial
@@ -45,9 +47,10 @@ OUTPUT INSERTED.id;
         gsr_raw = pkt[EChannelType.GSR_RAW]
         ppg_raw = pkt[EChannelType.INTERNAL_ADC_13]
         # print(pkt.channels)
-        # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
+        #print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
-        self.live_data = self.live_data.append({'timestamp': timestamp, 'gsr_raw': gsr_raw, 'ppg_raw': ppg_raw}, ignore_index=True)
+        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw]})
+        self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
         self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
                             self.id, timestamp, gsr_raw, ppg_raw)
         self.cnxn.commit()
@@ -60,4 +63,5 @@ OUTPUT INSERTED.id;
 
     def stop_streaming(self):
         self.shim_dev.stop_streaming()
+        time.sleep(1)
         self.shim_dev.shutdown()
