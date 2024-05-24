@@ -47,7 +47,11 @@ OUTPUT INSERTED.id;
         gsr_raw = pkt[EChannelType.GSR_RAW]
         ppg_raw = pkt[EChannelType.INTERNAL_ADC_13]
         # print(pkt.channels)
+<<<<<<< HEAD
         #print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
+=======
+        print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
+>>>>>>> 3a365049085d8854257a1bf33b74ab9b62311009
 
         new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw]})
         self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
@@ -64,4 +68,8 @@ OUTPUT INSERTED.id;
     def stop_streaming(self):
         self.shim_dev.stop_streaming()
         time.sleep(1)
+<<<<<<< HEAD
         self.shim_dev.shutdown()
+=======
+        self.shim_dev.shutdown()
+>>>>>>> 3a365049085d8854257a1bf33b74ab9b62311009
