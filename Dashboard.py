@@ -178,5 +178,35 @@ with tab2:
 
     # Create a Plotly line chart with a date range slider
     fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
-    fig.update_xaxes(rangeslider_visible=True)
+    fig.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=30, label="30m", step="minute", stepmode="backward"),
+                dict(count=1, label="1h", step="hour", stepmode="backward"),
+                dict(count=2, label="2h", step="hour", stepmode="backward"),
+                dict(count=1, label="1d", step="day", stepmode="backward"),
+                dict(step="all")
+            ])
+        )
+    )
+    fig.update_layout(
+        xaxis_title='Date',
+        yaxis_title='GSR',
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=30, label="30m", step="minute", stepmode="backward"),
+                    dict(count=1, label="1h", step="hour", stepmode="backward"),
+                    dict(count=2, label="2h", step="hour", stepmode="backward"),
+                    dict(count=1, label="1d", step="day", stepmode="backward"),
+                    dict(step="all")
+                ])
+            ),
+            rangeslider=dict(
+                visible=True
+            ),
+            type="date"
+        )
+    )
     st.plotly_chart(fig)
