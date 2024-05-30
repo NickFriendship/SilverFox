@@ -7,3 +7,5 @@ serial
 pyserial
 pyshimmer
 altair
+
+plotly

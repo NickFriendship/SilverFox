@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import pyodbc
+import plotly.express as px
+import plotly.graph_objects as go
 import numpy as np
 import altair as alt
 import time
@@ -31,7 +33,7 @@ def fetch_sensor_data(conn):
 st.header('Dashboard Mindgames - PSV', divider='red')
 
 # Create tabs
-tab1, tab2, tab3 = st.tabs(["Live monitoring", "Historical HRV", "Historical GSR"])
+tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
 
 with tab1:
     # Initialize or update session state
@@ -115,7 +117,7 @@ with tab1:
                 st.altair_chart(combined_chart, theme=None, use_container_width=True)
                 time.sleep(1)
 
-with tab3:
+with tab2:
     # Create a connection to the database
     try:
         conn = get_db_connection()
@@ -130,22 +132,22 @@ with tab3:
     if data.empty:
         st.warning("No data available")
     else:
-        data['data_timestamp'] = pd.to_datetime(data['data_timestamp'])
+        data['datetime'] = pd.to_datetime(data['datetime'])
 
     # Create box with filter
     with st.expander("Filter"):
         col1, col2, col3, col4 = st.columns(4, gap="large")
         with col1:
-            start_date = st.date_input("Start date", data['data_timestamp'].min().date())
+            start_date = st.date_input("Start date", data['datetime'].min().date())
         with col2:
-            end_date = st.date_input("End date", data['data_timestamp'].max().date())
+            end_date = st.date_input("End date", data['datetime'].max().date())
         with col3:
             st.selectbox('Training type', ("aristotle", "MoveSense"), index=None)
         with col4:
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
 
     # Filter data based on user input
-    filtered_data = data[(data['data_timestamp'].dt.date >= start_date) & (data['data_timestamp'].dt.date <= end_date)]
+    filtered_data = data[(data['datetime'].dt.date >= start_date) & (data['datetime'].dt.date <= end_date)]
 
     # Check if filtered data is empy
     if filtered_data.empty:
@@ -174,6 +176,10 @@ with tab3:
     ppm = filtered_data['ppg_raw'].mean()
     col5.metric("Peaks per minute", f"{ppm:.0f} ppm")
 
-    # Streamlit line chart
-    st.subheader("GSR (galvanic skin response)")
-    st.line_chart(filtered_data.set_index('data_timestamp')['gsr_raw'])
+    # Create a Plotly line chart with a date range slider
+    fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
+
+    fig.update_xaxes(rangeslider_visible=True)
+
+    # Display the Plotly figure
+    st.plotly_chart(fig)
