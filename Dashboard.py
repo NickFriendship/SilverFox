@@ -178,10 +178,5 @@ with tab2:
 
     # Create a Plotly line chart with a date range slider
     fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
-
     fig.update_xaxes(rangeslider_visible=True)
-
-    # Display the Plotly figure
     st.plotly_chart(fig)
-
-    #test
