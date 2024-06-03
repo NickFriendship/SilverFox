@@ -1,69 +1,37 @@
 import streamlit as st
 import pandas as pd
 import pyodbc
-import plotly.express as px
 import numpy as np
 import altair as alt
 import time
 import config
-from sqlalchemy import create_engine
-
+import plotly.express as px
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
 
 # Database connection function
 def get_db_connection():
-    try:
-        conn = pyodbc.connect(
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={config.server_host};"
-            f"DATABASE=PSV;"
-            f"UID=team;"
-            f"PWD={config.password}"
-        )
-        st.write("Database connection successful")
-        return conn
-    except pyodbc.Error as e:
-        st.error(f"Database connection failed: {e}")
-        st.stop()
+    conn = pyodbc.connect(
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={config.server_host};"
+        f"DATABASE=PSV;"
+        f"UID=team;"
+        f"PWD={config.password}"
+    )
+    return conn
 
-# Fetch sensor data from the database
+
+# Fetch HRV data from the database
 def fetch_sensor_data(conn):
     query = "SELECT * FROM dbo.sensor_data"
-    sensor_data = pd.read_sql(query, conn)
-    return sensor_data
-
-# Fetch measurement data from the database
-def fetch_measurement_data(conn):
-    query = "SELECT * FROM dbo.measurement"
-    measurement_data = pd.read_sql(query, conn)
-    return measurement_data
-
-# Fetch shimmer data from the database
-def fetch_shimmer_data(conn):
-    query = "SELECT * FROM dbo.shimmer"
-    shimmer_data = pd.read_sql(query, conn)
-    return shimmer_data
-
-def fetch_PSV_DATA(conn):
-    query = "SELECT * FROM dbo.PSV_DATA"
-    PSV_DATA = pd.read_sql(query, conn)
-    return PSV_DATA
-
-
-
-
-
-# Main function to fetch and display data
-def main():
-    # Create a connection to the database
-    conn = get_db_connection()
+    data = pd.read_sql(query, conn)
+    return data
 
 # Title
-st.header('Dashboard Mindgames - PSV')
+st.header('Dashboard Mindgames - PSV', divider='red')
 
 # Create tabs
-tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
+tab1, tab2, tab3 = st.tabs(["Live monitoring", "Historical HRV", "Historical GSR"])
 
 with tab1:
     # Initialize or update session state
@@ -91,7 +59,6 @@ with tab1:
     annotations_df["y"] = 0
 
     if submit_button or st.session_state.disabled == True:
-        st.write("Monitoring started")
 
         # Ping form
         with st.form('ping_form', clear_on_submit=True):
@@ -148,9 +115,13 @@ with tab1:
                 st.altair_chart(combined_chart, theme=None, use_container_width=True)
                 time.sleep(1)
 
-with tab2:
+with tab3:
     # Create a connection to the database
-    conn = get_db_connection()
+    try:
+        conn = get_db_connection()
+    except pyodbc.Error as e:
+        st.error(f"Database connection failed: {e}")
+        st.stop()
 
     # Fetch data
     data = fetch_sensor_data(conn)
@@ -159,22 +130,22 @@ with tab2:
     if data.empty:
         st.warning("No data available")
     else:
-        data['datetime'] = pd.to_datetime(data['datetime'])
+        data['data_timestamp'] = pd.to_datetime(data['data_timestamp'])
 
     # Create box with filter
     with st.expander("Filter"):
         col1, col2, col3, col4 = st.columns(4, gap="large")
         with col1:
-            start_date = st.date_input("Start date", data['datetime'].min().date())
+            start_date = st.date_input("Start date", data['data_timestamp'].min().date())
         with col2:
-            end_date = st.date_input("End date", data['datetime'].max().date())
+            end_date = st.date_input("End date", data['data_timestamp'].max().date())
         with col3:
             st.selectbox('Training type', ("aristotle", "MoveSense"), index=None)
         with col4:
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
 
     # Filter data based on user input
-    filtered_data = data[(data['datetime'].dt.date >= start_date) & (data['datetime'].dt.date <= end_date)]
+    filtered_data = data[(data['data_timestamp'].dt.date >= start_date) & (data['data_timestamp'].dt.date <= end_date)]
 
     # Check if filtered data is empy
     if filtered_data.empty:
@@ -203,46 +174,22 @@ with tab2:
     ppm = filtered_data['ppg_raw'].mean()
     col5.metric("Peaks per minute", f"{ppm:.0f} ppm")
 
-    # Create a Plotly line chart with a date range slider
-    fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
+    # Streamlit line chart
+    st.subheader("GSR (galvanic skin response)")
+    st.line_chart(filtered_data.set_index('data_timestamp')['gsr_raw'])
 
-    fig.update_xaxes(rangeslider_visible=True)
+# Ensure 'timestamp' is in datetime format
+filtered_data['timestamp'] = pd.to_datetime(filtered_data['timestamp'])
 
-    # Display the Plotly figure
-    st.plotly_chart(fig)
+# Assume training session is based on date
+filtered_data['session'] = filtered_data['timestamp'].dt.date
 
+# Calculate average RMSSD (HRV proxy) per session and player
+avg_hrv_per_session = filtered_data.groupby(['session', 'PlayerID'])['RMSSD'].mean().reset_index()
 
-    # Fetch data from the tables
-    sensor_data = fetch_sensor_data(conn)
-    measurement_data = fetch_measurement_data(conn)
-    shimmer_data = fetch_shimmer_data(conn)
+# Create the bar chart
+fig = px.bar(avg_hrv_per_session, x='session', y='RMSSD', color='PlayerID',
+             barmode='group', title='Average HRV per Training Session')
 
-    # Merge the tables to create a complete dataset
-    merged_data = pd.merge(sensor_data, shimmer_data, left_on="shimmer_id", right_on="id")
-    merged_data = pd.merge(merged_data, measurement_data, left_on="shimmer_id", right_on="shimmer_id")
-
-    # Calculate the average GSR per event
-    average_gsr_per_event = merged_data.groupby('event')['gsr_raw'].mean().reset_index()
-
-    # Display the results
-    st.header('Average GSR per Event')
-    st.dataframe(average_gsr_per_event)
-
-if __name__ == "__main__":
-    main()
-
-    # Create a connection to the database
-    conn = get_db_connection()
-
-    # Fetch data
-    PSV_DATA = fetch_PSV_DATA(conn)
-
-    # Calculate average RRMSSD per player
-    average_rrmssd_per_player = PSV_DATA.groupby('PlayerID')['RMSSD'].mean().reset_index()
-
-    # Create a bar chart for average RRMSSD per player
-    fig = px.bar(average_rrmssd_per_player, x='PlayerID', y='RMSSD', title='Average HRV per Player')
-
-    # Display the bar chart in Streamlit
-    st.plotly_chart(fig)
-
+# Display the Plotly figure in Streamlit
+st.plotly_chart(fig)

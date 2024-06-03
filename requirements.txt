@@ -8,4 +8,11 @@ pyserial
 pyshimmer
 altair
 
+config
+
 plotly
+
+plotly
+
+sqlalchemy
+
