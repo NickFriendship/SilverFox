@@ -19,7 +19,6 @@ st.header('Dashboard Mindgames - PSV', divider='red')
 tab1, tab2, tab3 = st.tabs(["Live monitoring", "Historical HRV", "Historical GSR"])
 
 with tab1:
-
     # Form to start monitoring
     with st.form('start_form'):
         col1, col2, col3, col4 = st.columns(4, gap="large")
@@ -27,14 +26,15 @@ with tab1:
             st.selectbox('Game', ("Aristotle", "MoveSense"), index=None)
         with col2:
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
-        submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True), disabled=st.session_state.disabled)
+        submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True),
+                                              disabled=st.session_state.disabled)
 
     # Annotations setup
     annotations = [(10, "Speler mist de bal"), (13, "Speler schrikt van onweer"), (19, "Speler moet niezen")]
     annotations_df = pd.DataFrame(annotations, columns=["index", "event"])
     annotations_df["y"] = 0
 
-    if submit_button or st.session_state.disabled == True:
+    if submit_button or st.session_state.disabled:
 
         # Start streaming
         device = ShimmerDevice('COM3')
@@ -47,9 +47,10 @@ with tab1:
             submit_ping = st.form_submit_button("Send ping")
 
         if submit_ping:
-            annotations_df = annotations_df.append({'index': len(st.session_state.line_chart_data) - 1, 'event': ping_text, 'y': 0}, ignore_index=True)
+            annotations_df = annotations_df.append(
+                {'index': len(st.session_state.line_chart_data) - 1, 'event': ping_text, 'y': 0}, ignore_index=True)
             st.toast('Ping sent', icon="🎉")
-        
+
         colu1, colu2, colu3 = st.columns([1, 1, 0.2])
         with colu3:
             stop_button = st.button('Stop streaming', type="primary")
@@ -65,7 +66,7 @@ with tab1:
 
                 # Build the GSR line chart
                 gsr_chart = alt.Chart(live_data).transform_fold(
-                    ["gsr_raw"],
+                    ["gsr"],
                     as_=['Measurement', 'value']
                 ).mark_line().encode(
                     x='timestamp:T',
@@ -87,6 +88,6 @@ with tab1:
                     st.altair_chart(gsr_chart, theme=None, use_container_width=True)
                     st.altair_chart(ppg_chart, theme=None, use_container_width=True)
                     time.sleep(1)
-                
+
             if seconds == 20:
-                    device.stop_streaming()
+                device.stop_streaming()

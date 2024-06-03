@@ -50,7 +50,8 @@ OUTPUT INSERTED.id;
         # print(pkt.channels)
         print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
-        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw]})
+        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw],
+                                'gsr': [convert_ADC_to_GSR(gsr_raw)]})
         self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
         self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
                             self.id, timestamp, gsr_raw, ppg_raw)
