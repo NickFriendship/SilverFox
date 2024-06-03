@@ -1,18 +1,11 @@
 streamlit
 pandas
 numpy
-
 pyodbc
 serial
 pyserial
 pyshimmer
 altair
 
-config
-
 plotly
-
-plotly
-
-sqlalchemy
 

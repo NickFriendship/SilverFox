@@ -6,10 +6,10 @@ import numpy as np
 import altair as alt
 import time
 import config
-from sqlalchemy import create_engine
 
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
+
 
 # Database connection function
 def get_db_connection():
@@ -27,11 +27,13 @@ def get_db_connection():
         st.error(f"Database connection failed: {e}")
         st.stop()
 
+
 # Fetch sensor data from the database
 def fetch_sensor_data(conn):
     query = "SELECT * FROM dbo.sensor_data"
     sensor_data = pd.read_sql(query, conn)
     return sensor_data
+
 
 # Fetch measurement data from the database
 def fetch_measurement_data(conn):
@@ -39,11 +41,13 @@ def fetch_measurement_data(conn):
     measurement_data = pd.read_sql(query, conn)
     return measurement_data
 
+
 # Fetch shimmer data from the database
 def fetch_shimmer_data(conn):
     query = "SELECT * FROM dbo.shimmer"
     shimmer_data = pd.read_sql(query, conn)
     return shimmer_data
+
 
 def fetch_PSV_DATA(conn):
     query = "SELECT * FROM dbo.PSV_DATA"
@@ -51,13 +55,11 @@ def fetch_PSV_DATA(conn):
     return PSV_DATA
 
 
-
-
-
 # Main function to fetch and display data
 def main():
     # Create a connection to the database
     conn = get_db_connection()
+
 
 # Title
 st.header('Dashboard Mindgames - PSV')
@@ -211,7 +213,6 @@ with tab2:
     # Display the Plotly figure
     st.plotly_chart(fig)
 
-
     # Fetch data from the tables
     sensor_data = fetch_sensor_data(conn)
     measurement_data = fetch_measurement_data(conn)
@@ -245,4 +246,3 @@ if __name__ == "__main__":
 
     # Display the bar chart in Streamlit
     st.plotly_chart(fig)
-
