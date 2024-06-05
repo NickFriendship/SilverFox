@@ -8,6 +8,7 @@ import config
 
 
 class ShimmerDevice:
+
     def __init__(self, com_port):
         self.live_data = pd.DataFrame(columns=['timestamp', 'gsr_raw', 'ppg_raw'])
         self.com_port = com_port
@@ -49,7 +50,8 @@ OUTPUT INSERTED.id;
         # print(pkt.channels)
         print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
-        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw]})
+        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw],
+                                'gsr': [convert_ADC_to_GSR(gsr_raw)]})
         self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
         self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
                             self.id, timestamp, gsr_raw, ppg_raw)
@@ -65,3 +67,28 @@ OUTPUT INSERTED.id;
         self.shim_dev.stop_streaming()
         time.sleep(1)
         self.shim_dev.shutdown()
+
+
+# noinspection DuplicatedCode
+def convert_ADC_to_GSR(gsr_raw_value):
+    r_feedback_per_range = [
+        40.2,  # range 0
+        287.0,  # range 1
+        1000.0,  # range 2
+        3300.0  # range 3
+    ]
+
+    gsr_range = (gsr_raw_value >> 14) & 0x03;
+    gsr_raw_value = gsr_raw_value & 4095
+    if gsr_range == 3 and gsr_raw_value < 683:
+        gsr_raw_value = 683
+    adcRange = pow(2, 12) - 1
+    ref_adc_voltage = 3.0
+
+    calVolts = (((gsr_raw_value * ref_adc_voltage) / adcRange))
+
+    r_feedback = r_feedback_per_range[gsr_range]
+    gsr_ref_voltage = 0.5
+    gsr_resistance = r_feedback / ((calVolts / gsr_ref_voltage) - 1.0)
+    conductance = 1000.0 / gsr_resistance
+    return conductance
