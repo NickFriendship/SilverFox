@@ -9,6 +9,15 @@ from shimmer import ShimmerDevice
 if "disabled" not in st.session_state:
     st.session_state.disabled = False
 
+if "device" not in st.session_state:
+    st.session_state.device = None
+
+if "line_chart_data" not in st.session_state:
+    st.session_state.line_chart_data = pd.DataFrame(columns=["timestamp", "gsr_raw", "ppg_raw"])
+
+if "annotations_df" not in st.session_state:
+    st.session_state.annotations_df = pd.DataFrame(columns=["timestamp", "value", "y"])
+
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
 
@@ -19,7 +28,7 @@ st.header('Dashboard Mindgames - PSV', divider='red')
 tab1, tab2, tab3 = st.tabs(["Live monitoring", "Historical HRV", "Historical GSR"])
 
 with tab1:
-
+    
     # Form to start monitoring
     with st.form('start_form'):
         col1, col2, col3, col4 = st.columns(4, gap="large")
@@ -29,17 +38,12 @@ with tab1:
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
         submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True), disabled=st.session_state.disabled)
 
-    # Annotations setup
-    annotations = [(10, "Speler mist de bal"), (13, "Speler schrikt van onweer"), (19, "Speler moet niezen")]
-    annotations_df = pd.DataFrame(annotations, columns=["index", "event"])
-    annotations_df["y"] = 0
-
     if submit_button or st.session_state.disabled == True:
-
-        # Start streaming
-        device = ShimmerDevice('COM3')
-        device.start_streaming()
-        st.toast('Shimmer connected', icon="🎉")
+        if st.session_state.device is None:
+            # Start streaming
+            st.session_state.device = ShimmerDevice('COM3')
+            st.session_state.device.start_streaming()
+            st.toast('Shimmer connected', icon="🎉")
 
         # Ping form
         with st.form('ping_form', clear_on_submit=True):
@@ -47,7 +51,12 @@ with tab1:
             submit_ping = st.form_submit_button("Send ping")
 
         if submit_ping:
-            annotations_df = annotations_df.append({'index': len(st.session_state.line_chart_data) - 1, 'event': ping_text, 'y': 0}, ignore_index=True)
+            new_annotation = {
+                'timestamp': st.session_state.line_chart_data.iloc[-1]['timestamp'], 
+                'value': ping_text, 
+                'y': st.session_state.line_chart_data.iloc[-1]['gsr_raw']
+            }
+            st.session_state.annotations_df = st.session_state.annotations_df.append(new_annotation, ignore_index=True)
             st.toast('Ping sent', icon="🎉")
         
         colu1, colu2, colu3 = st.columns([1, 1, 0.2])
@@ -56,25 +65,37 @@ with tab1:
 
         placeholder = st.empty()
         # Continuous data generation loop
-        for seconds in range(21):
+        for seconds in range(25):
             if seconds > 0:  # To prevent initial duplicate data generation             
-
                 # Append livestreamed values to DataFrame
-                live_data = device.get_live_data()
-                live_data_tail = live_data.reset_index().tail(5)
+                live_data = st.session_state.device.get_live_data()
+                live_data_tail = live_data.reset_index().tail(20)
+                annotations_data_tail = st.session_state.annotations_df[st.session_state.annotations_df['timestamp'] >= live_data_tail['timestamp'].min()], ignore_index=True
+                st.session_state.line_chart_data = live_data
+                annotations_data_tail
 
                 # Build the GSR line chart
-                gsr_chart = alt.Chart(live_data).transform_fold(
+                gsr_chart = alt.Chart(live_data_tail).transform_fold(
                     ["gsr_raw"],
                     as_=['Measurement', 'value']
                 ).mark_line().encode(
-                    x='timestamp:T',
+                    x=alt.X('timestamp:T', axis=alt.Axis(title='Timestamp')),
                     y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
                     color='Measurement:N'
                 ).interactive()
 
+                # Update annotations to move with the data
+                annotation_layer = (
+                    alt.Chart(annotations_data_tail)
+                    .mark_text(size=25, text="⬇️", dx=0, dy=100, align="center")
+                    .encode(x=alt.X("timestamp:Q", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
+                )
+
+                # Show chart
+                combined_chart_gsr = gsr_chart + annotation_layer
+
                 # Build the PPG line chart
-                ppg_chart = alt.Chart(live_data).transform_fold(
+                ppg_chart = alt.Chart(live_data_tail).transform_fold(
                     ["ppg_raw"],
                     as_=['Measurement', 'value']
                 ).mark_line().encode(
@@ -84,9 +105,12 @@ with tab1:
                 ).interactive()
 
                 with placeholder.container():
-                    st.altair_chart(gsr_chart, theme=None, use_container_width=True)
+                    st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
                     st.altair_chart(ppg_chart, theme=None, use_container_width=True)
                     time.sleep(1)
-                
-            if seconds == 20:
-                    device.stop_streaming()
+
+            if stop_button or seconds == 20:
+                st.session_state.device.stop_streaming()
+                st.session_state.device = None
+                st.toast('Shimmer disconnected', icon="🔌")
+                break
