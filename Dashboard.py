@@ -49,13 +49,6 @@ def fetch_shimmer_data(conn):
     shimmer_data = pd.read_sql(query, conn)
     return shimmer_data
 
-
-def fetch_PSV_DATA(conn):
-    query = "SELECT * FROM dbo.PSV_DATA"
-    PSV_DATA = pd.read_sql(query, conn)
-    return PSV_DATA
-
-
 # Main function to fetch and display data
 def main():
     # Create a connection to the database
@@ -157,7 +150,6 @@ with ((tab2)):
 
     # Fetch data
     sensor_data = fetch_sensor_data(conn)
-    PSV_DATA = fetch_PSV_DATA(conn)
     measurement_data = fetch_measurement_data(conn)
     shimmer_data = fetch_shimmer_data(conn)
 
@@ -239,14 +231,11 @@ with ((tab2)):
     if __name__ == "__main__":
         main()
 
-        # Fetch data
-        PSV_DATA = fetch_PSV_DATA(conn)
-
         # Calculate average RRMSSD per player
-        average_rrmssd_per_player = PSV_DATA.groupby('PlayerID')['RMSSD'].mean().reset_index()
+        #average_rrmssd_per_player = sensor_data.groupby('PlayerID')['RMSSD'].mean().reset_index()
 
         # Create a bar chart for average RRMSSD per player
-        fig = px.bar(average_rrmssd_per_player, x='PlayerID', y='RMSSD', title='Average HRV per Player')
+        #fig = px.bar(average_rrmssd_per_player, x='PlayerID', y='RMSSD', title='Average HRV per Player')
 
         # Display the bar chart in Streamlit
-    st.plotly_chart(fig)
+        #st.plotly_chart(fig)
