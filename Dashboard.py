@@ -11,7 +11,6 @@ import shimmer
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
 
-
 # Database connection function
 def get_db_connection():
     try:
@@ -182,19 +181,19 @@ with ((tab2)):
     col1, col2, col3, col4, col5 = st.columns(5, gap="large")
 
     # Display average Heart rate in a box
-    average_heart = PSV_DATA['heart'].mean()
+    average_heart = filtered_data['ppg_raw'].mean()
     col1.metric("Average Heart rate", f"{average_heart:.0f} bpm")
 
     # Display max HRV in a box
-    max_hrv = PSV_DATA['RMSSD'].max()
+    max_hrv = filtered_data['ppg_raw'].max()
     col2.metric("Max HRV", f"{max_hrv:.0f} ms")
 
     # Display minimum HRV in a box
-    min_hrv = PSV_DATA['RMSSD'].min()
+    min_hrv = filtered_data['ppg_raw'].min()
     col3.metric("Min HRV", f"{min_hrv:.0f} ms")
 
     # Display average HRV in a box
-    average_hrv = PSV_DATA['RMSSD'].mean()
+    average_hrv = filtered_data['ppg_raw'].mean()
     col4.metric("Average HRV", f"{average_hrv:.0f} ms")
 
     # Display Peaks per minute in a box
@@ -237,17 +236,17 @@ with ((tab2)):
     st.header('Average GSR per Event')
     st.dataframe(average_gsr_per_event)
 
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
 
-    # Fetch data
-    PSV_DATA = fetch_PSV_DATA(conn)
+        # Fetch data
+        PSV_DATA = fetch_PSV_DATA(conn)
 
-    # Calculate average RRMSSD per player
-    average_rrmssd_per_player = PSV_DATA.groupby('PlayerID')['RMSSD'].mean().reset_index()
+        # Calculate average RRMSSD per player
+        average_rrmssd_per_player = PSV_DATA.groupby('PlayerID')['RMSSD'].mean().reset_index()
 
-    # Create a bar chart for average RRMSSD per player
-    fig = px.bar(average_rrmssd_per_player, x='PlayerID', y='RMSSD', title='Average HRV per Player')
+        # Create a bar chart for average RRMSSD per player
+        fig = px.bar(average_rrmssd_per_player, x='PlayerID', y='RMSSD', title='Average HRV per Player')
 
-    # Display the bar chart in Streamlit
+        # Display the bar chart in Streamlit
     st.plotly_chart(fig)
