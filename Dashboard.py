@@ -6,6 +6,7 @@ import numpy as np
 import altair as alt
 import time
 import config
+import shimmer
 
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
@@ -27,10 +28,12 @@ def get_db_connection():
         st.error(f"Database connection failed: {e}")
         st.stop()
 
+
 # Fetch sensor data from the database
 def fetch_sensor_data(conn):
     query = "SELECT * FROM dbo.sensor_data"
     sensor_data = pd.read_sql(query, conn)
+    sensor_data['gsr'] = sensor_data['gsr_raw'].apply(shimmer.convert_ADC_to_GSR)
     return sensor_data
 
 
@@ -172,8 +175,8 @@ with ((tab2)):
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
 
     # Filter data based on user input
-    filtered_data = sensor_data[(sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
-
+    filtered_data = sensor_data[
+        (sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
 
     # Create columns for metrics
     col1, col2, col3, col4, col5 = st.columns(5, gap="large")
@@ -204,8 +207,8 @@ with ((tab2)):
     # Create an Altair line chart with the filtered data and add the selection
     alt_chart = alt.Chart(filtered_data).mark_line().encode(
         x='datetime:T',
-        y='gsr_raw:Q',
-        tooltip=['datetime', 'gsr_raw']
+        y='gsr:Q',
+        tooltip=['datetime', 'gsr']
     ).add_selection(
         date_range
     ).properties(
@@ -228,7 +231,7 @@ with ((tab2)):
     merged_data = pd.merge(merged_data, measurement_data, left_on="shimmer_id", right_on="shimmer_id")
 
     # Calculate the average GSR per event
-    average_gsr_per_event = merged_data.groupby('event')['gsr_raw'].mean().reset_index()
+    average_gsr_per_event = merged_data.groupby('event')['gsr'].mean().reset_index()
 
     # Display the results
     st.header('Average GSR per Event')
