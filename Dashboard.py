@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
 import pyodbc
-import plotly.express as px
 import numpy as np
 import altair as alt
 import time
 import config
 import shimmer
+import neurokit2 as nk
 
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
@@ -26,7 +26,6 @@ def get_db_connection():
     except pyodbc.Error as e:
         st.error(f"Database connection failed: {e}")
         st.stop()
-
 
 # Fetch sensor data from the database
 def fetch_sensor_data(conn):
@@ -169,6 +168,13 @@ with ((tab2)):
     filtered_data = sensor_data[
         (sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
 
+    sampling_rate = 100
+
+    peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=sampling_rate)
+    hrv_time = nk.hrv_time(peaks, sampling_rate=sampling_rate, show=True)
+
+    st.dataframe(hrv_time)
+
     # Create columns for metrics
     col1, col2, col3, col4, col5 = st.columns(5, gap="large")
 
@@ -188,12 +194,8 @@ with ((tab2)):
     average_hrv = filtered_data['ppg_raw'].mean()
     col4.metric("Average HRV", f"{average_hrv:.0f} ms")
 
-    # Display Peaks per minute in a box
-    ppm = filtered_data['ppg_raw'].mean()
-    col5.metric("Peaks per minute", f"{ppm:.0f} ppm")
-
     # Create a selection interval for the date range slider
-    date_range = alt.selection_interval(bind='scales', encodings=['x'])
+    date_range = alt.selection_interval(bind='scales', encodings=['x', 'y'])
 
     # Create an Altair line chart with the filtered data and add the selection
     alt_chart = alt.Chart(filtered_data).mark_line().encode(
@@ -208,6 +210,21 @@ with ((tab2)):
 
     # Display the Altair chart
     st.altair_chart(alt_chart, use_container_width=True)
+
+    # Create an Altair line chart with the filtered data and add the selection
+    raw_ppg = alt.Chart(filtered_data).mark_line().encode(
+        x='datetime:T',
+        y='ppg_raw:Q',
+        tooltip=['datetime', 'ppg_raw']
+    ).add_selection(
+        date_range
+    ).properties(
+        title='PPG (galvanic skin response)'
+    )
+
+    # Display the Altair chart
+    st.altair_chart(raw_ppg, use_container_width=True)
+
 
     #Create a Plotly line chart with a date range slider
     #fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
