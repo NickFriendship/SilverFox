@@ -38,7 +38,7 @@ with tab1:
             st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
         submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True), disabled=st.session_state.disabled)
 
-    if submit_button or st.session_state.disabled == True:
+    if submit_button or st.session_state.disabled:
         if st.session_state.device is None:
             # Start streaming
             st.session_state.device = ShimmerDevice('COM3')
@@ -69,13 +69,16 @@ with tab1:
             if seconds > 0:  # To prevent initial duplicate data generation             
                 # Append livestreamed values to DataFrame
                 live_data = st.session_state.device.get_live_data()
-                live_data_tail = live_data.reset_index().tail(20)
-                annotations_data_tail = st.session_state.annotations_df[st.session_state.annotations_df['timestamp'] >= live_data_tail['timestamp'].min()], ignore_index=True
-                st.session_state.line_chart_data = live_data
-                annotations_data_tail
+                st.session_state.line_chart_data = pd.concat([st.session_state.line_chart_data, live_data]).drop_duplicates().reset_index(drop=True)
+                
+                # Keep only the last 40 datapoints
+                st.session_state.line_chart_data = st.session_state.line_chart_data.tail(100)
+
+                # Ensure annotations are in sync with the live data
+                annotations_data_tail = st.session_state.annotations_df[st.session_state.annotations_df['timestamp'] >= st.session_state.line_chart_data['timestamp'].min()]
 
                 # Build the GSR line chart
-                gsr_chart = alt.Chart(live_data_tail).transform_fold(
+                gsr_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
                     ["gsr_raw"],
                     as_=['Measurement', 'value']
                 ).mark_line().encode(
@@ -88,14 +91,14 @@ with tab1:
                 annotation_layer = (
                     alt.Chart(annotations_data_tail)
                     .mark_text(size=25, text="⬇️", dx=0, dy=100, align="center")
-                    .encode(x=alt.X("timestamp:Q", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
+                    .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
                 )
 
                 # Show chart
                 combined_chart_gsr = gsr_chart + annotation_layer
 
                 # Build the PPG line chart
-                ppg_chart = alt.Chart(live_data_tail).transform_fold(
+                ppg_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
                     ["ppg_raw"],
                     as_=['Measurement', 'value']
                 ).mark_line().encode(
@@ -109,7 +112,7 @@ with tab1:
                     st.altair_chart(ppg_chart, theme=None, use_container_width=True)
                     time.sleep(1)
 
-            if stop_button or seconds == 20:
+            if stop_button or seconds == 24:
                 st.session_state.device.stop_streaming()
                 st.session_state.device = None
                 st.toast('Shimmer disconnected', icon="🔌")
