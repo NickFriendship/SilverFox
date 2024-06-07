@@ -9,3 +9,5 @@ altair
 
 plotly
 
+
+neurokit2
