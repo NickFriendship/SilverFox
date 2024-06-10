@@ -4,6 +4,7 @@ import numpy as np
 import altair as alt
 import time
 from shimmer import ShimmerDevice
+from shimmer import convert_ADC_to_GSR  # Import the conversion function
 
 # Initialize or update session state
 if "disabled" not in st.session_state:
@@ -69,6 +70,13 @@ with tab1:
             if seconds > 0:  # To prevent initial duplicate data generation             
                 # Append livestreamed values to DataFrame
                 live_data = st.session_state.device.get_live_data()
+                
+                # Convert GSR raw values to integers
+                live_data['gsr_raw'] = live_data['gsr_raw'].astype(int)
+                
+                # Apply GSR conversion to the raw GSR values
+                #live_data['gsr_raw'] = live_data['gsr_raw'].apply(convert_ADC_to_GSR)
+                
                 st.session_state.line_chart_data = pd.concat([st.session_state.line_chart_data, live_data]).drop_duplicates().reset_index(drop=True)
                 
                 # Keep only the last 40 datapoints
@@ -90,7 +98,7 @@ with tab1:
                 # Update annotations to move with the data
                 annotation_layer = (
                     alt.Chart(annotations_data_tail)
-                    .mark_text(size=25, text="⬇️", dx=0, dy=100, align="center")
+                    .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
                     .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
                 )
 
