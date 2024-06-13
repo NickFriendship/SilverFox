@@ -168,30 +168,31 @@ with ((tab2)):
     filtered_data = sensor_data[
         (sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
 
-    sampling_rate = 100
+    # calculate the peaks from raw ppg
+    peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=100)
+    hrv_time = nk.hrv_time(peaks, sampling_rate=100, show=True)
 
-    peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=sampling_rate)
-    hrv_time = nk.hrv_time(peaks, sampling_rate=sampling_rate, show=True)
-
-    st.dataframe(hrv_time)
+    # Calculate the heart rate
+    rr_intervals_s = np.array(hrv_time) / 1000.0
+    average_rr_interval_s = np.mean(rr_intervals_s)
+    heart_rate = 60 / average_rr_interval_s
 
     # Create columns for metrics
-    col1, col2, col3, col4, col5 = st.columns(5, gap="large")
+    col1, col2, col3, col4 = st.columns(4, gap="large")
 
     # Display average Heart rate in a box
-    average_heart = filtered_data['ppg_raw'].mean()
-    col1.metric("Average Heart rate", f"{average_heart:.0f} bpm")
+    col1.metric("Average Heart rate", f"{heart_rate:.0f} bpm")
 
     # Display max HRV in a box
-    max_hrv = filtered_data['ppg_raw'].max()
+    max_hrv = hrv_time['HRV_MaxNN']
     col2.metric("Max HRV", f"{max_hrv:.0f} ms")
 
     # Display minimum HRV in a box
-    min_hrv = filtered_data['ppg_raw'].min()
+    min_hrv = hrv_time['HRV_MinNN']
     col3.metric("Min HRV", f"{min_hrv:.0f} ms")
 
     # Display average HRV in a box
-    average_hrv = filtered_data['ppg_raw'].mean()
+    average_hrv = hrv_time['HRV_MeanNN']
     col4.metric("Average HRV", f"{average_hrv:.0f} ms")
 
     # Create a selection interval for the date range slider
@@ -210,29 +211,6 @@ with ((tab2)):
 
     # Display the Altair chart
     st.altair_chart(alt_chart, use_container_width=True)
-
-    # Create an Altair line chart with the filtered data and add the selection
-    raw_ppg = alt.Chart(filtered_data).mark_line().encode(
-        x='datetime:T',
-        y='ppg_raw:Q',
-        tooltip=['datetime', 'ppg_raw']
-    ).add_selection(
-        date_range
-    ).properties(
-        title='PPG (galvanic skin response)'
-    )
-
-    # Display the Altair chart
-    st.altair_chart(raw_ppg, use_container_width=True)
-
-
-    #Create a Plotly line chart with a date range slider
-    #fig = px.line(filtered_data, x='datetime', y='gsr_raw', title='GSR (galvanic skin response)')
-
-    #fig.update_xaxes(rangeslider_visible=True)
-
-    #Display the Plotly figure
-    #st.plotly_chart(fig)
 
     # Merge the tables to create a complete dataset
     merged_data = pd.merge(sensor_data, shimmer_data, left_on="shimmer_id", right_on="id")
