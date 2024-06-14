@@ -5,9 +5,3 @@ pyodbc
 serial
 pyserial
 pyshimmer
-altair
-
-plotly
-
-
-neurokit2
