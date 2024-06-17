@@ -135,7 +135,6 @@ with tab2:
                 f"UID=team;"
                 f"PWD={config.password}"
             )
-            st.write("Database connection successful")
             return conn
         except pyodbc.Error as e:
             st.error(f"Database connection failed: {e}")
@@ -148,13 +147,11 @@ with tab2:
         sensor_data['gsr'] = sensor_data['gsr_raw'].apply(shimmer.convert_ADC_to_GSR)
         return sensor_data
 
-
     # Fetch measurement data from the database
     def fetch_measurement_data(conn):
         query = "SELECT * FROM dbo.measurement"
         measurement_data = pd.read_sql(query, conn)
         return measurement_data
-
 
     # Fetch shimmer data from the database
     def fetch_shimmer_data(conn):
@@ -174,6 +171,7 @@ with tab2:
     sensor_data = fetch_sensor_data(conn)
     measurement_data = fetch_measurement_data(conn)
     shimmer_data = fetch_shimmer_data(conn)
+    st.toast('Database connecting', icon="🔌")
 
     # Create box with filter
     with st.expander("Filter"):
@@ -196,7 +194,7 @@ with tab2:
     hrv_time = nk.hrv_time(peaks, sampling_rate=100, show=True)
 
     # Calculate the heart rate
-    rr_intervals_s = np.array(hrv_time) / 1000.0
+    rr_intervals_s = np.array(hrv_time['HRV_MeanNN']) / 1000.0
     average_rr_interval_s = np.mean(rr_intervals_s)
     heart_rate = 60 / average_rr_interval_s
 
@@ -207,15 +205,15 @@ with tab2:
     col1.metric("Average Heart rate", f"{heart_rate:.0f} bpm")
 
     # Display max HRV in a box
-    max_hrv = hrv_time['HRV_MaxNN']
+    max_hrv = hrv_time['HRV_MaxNN'].iloc[0]
     col2.metric("Max HRV", f"{max_hrv:.0f} ms")
 
     # Display minimum HRV in a box
-    min_hrv = hrv_time['HRV_MinNN']
+    min_hrv = hrv_time['HRV_MinNN'].iloc[0]
     col3.metric("Min HRV", f"{min_hrv:.0f} ms")
 
     # Display average HRV in a box
-    average_hrv = hrv_time['HRV_MeanNN']
+    average_hrv = hrv_time['HRV_MeanNN'].iloc[0]
     col4.metric("Average HRV", f"{average_hrv:.0f} ms")
 
     # Create a selection interval for the date range slider
@@ -245,3 +243,4 @@ with tab2:
     # Display the results
     st.header('Average GSR per Event')
     st.dataframe(average_gsr_per_event)
+    st.toast('Database succesfully connected', icon="🎉")
