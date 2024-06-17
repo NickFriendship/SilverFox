@@ -2,3 +2,9 @@ streamlit
 pandas
 numpy
 serial
+
+pyserial
+pyodbc
+pyshimmer
+altair
+neurokit2
