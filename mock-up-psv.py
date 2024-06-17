@@ -232,15 +232,3 @@ with tab2:
 
     # Display the Altair chart
     st.altair_chart(alt_chart, use_container_width=True)
-
-    # Merge the tables to create a complete dataset
-    merged_data = pd.merge(sensor_data, shimmer_data, left_on="shimmer_id", right_on="id")
-    merged_data = pd.merge(merged_data, measurement_data, left_on="shimmer_id", right_on="shimmer_id")
-
-    # Calculate the average GSR per event
-    average_gsr_per_event = merged_data.groupby('event')['gsr'].mean().reset_index()
-
-    # Display the results
-    st.header('Average GSR per Event')
-    st.dataframe(average_gsr_per_event)
-    st.toast('Database succesfully connected', icon="🎉")
