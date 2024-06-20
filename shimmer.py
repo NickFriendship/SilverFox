@@ -2,6 +2,7 @@ import time
 
 import pyodbc
 import pandas as pd
+import re
 from serial import Serial
 from pyshimmer import ShimmerBluetooth, DEFAULT_BAUDRATE, DataPacket, EChannelType
 import config
@@ -9,11 +10,19 @@ import config
 
 class ShimmerDevice:
 
-    def __init__(self, com_port):
+    def __init__(self, com_port, fake_fallback: bool = False):
         self.live_data = pd.DataFrame(columns=['timestamp', 'gsr_raw', 'ppg_raw'])
         self.com_port = com_port
-        self.serial = Serial(com_port, DEFAULT_BAUDRATE)
-        self.shim_dev = ShimmerBluetooth(self.serial)
+        try:
+            self.serial = Serial(com_port, DEFAULT_BAUDRATE)
+            self.shim_dev = ShimmerBluetooth(self.serial)
+        except Exception as e:
+            print(f"Failed to initialize Serial object with com_port: {com_port}. Error: {e}")
+            error_code = re.search(r'None, (\d+)\)', str(e))
+            if fake_fallback and error_code and error_code.group(1) == '121':
+                self.shim_dev = FakeShimmerBluetooth()
+            else:
+                raise e
         self.shim_dev.initialize()
 
         self.batt = self.shim_dev.get_battery_state(True)
@@ -48,7 +57,7 @@ OUTPUT INSERTED.id;
         gsr_raw = pkt[EChannelType.GSR_RAW]
         ppg_raw = pkt[EChannelType.INTERNAL_ADC_13]
         # print(pkt.channels)
-        print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
+        # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
         new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw],
                                 'gsr': [convert_ADC_to_GSR(gsr_raw)]})
@@ -92,3 +101,29 @@ def convert_ADC_to_GSR(gsr_raw_value):
     gsr_resistance = r_feedback / ((calVolts / gsr_ref_voltage) - 1.0)
     conductance = 1000.0 / gsr_resistance
     return conductance
+
+
+class FakeShimmerBluetooth:
+    def __init__(self):
+        self._initialized = False
+
+    def initialize(self):
+        self._initialized = True
+
+    def get_battery_state(self, arg):
+        return 0
+
+    def get_device_name(self):
+        return "Fake Device"
+
+    def add_stream_callback(self, handler):
+        pass
+
+    def start_streaming(self):
+        pass
+
+    def stop_streaming(self):
+        pass
+
+    def shutdown(self):
+        pass

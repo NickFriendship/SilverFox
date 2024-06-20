@@ -6,3 +6,4 @@ pyodbc
 pyshimmer
 altair
 neurokit2
+serial

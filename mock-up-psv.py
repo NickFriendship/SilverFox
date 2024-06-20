@@ -10,6 +10,54 @@ from shimmer import ShimmerDevice
 from shimmer import convert_ADC_to_GSR  # Import the conversion function
 import neurokit2 as nk
 
+# Config of variables
+com_port = 'COM8'
+fake_fallback = True
+
+# Fetch player data from the database
+def fetch_player_data(conn):
+    query = "SELECT * FROM dbo.player"
+    player_data = pd.read_sql(query, conn)
+    return player_data
+
+
+def get_db_connection():
+    try:
+        conn = pyodbc.connect(
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={config.server_host};"
+            f"DATABASE=PSV;"
+            f"UID=team;"
+            f"PWD={config.password}"
+        )
+        return conn
+    except pyodbc.Error as e:
+        st.error(f"Database connection failed: {e}")
+        st.stop()
+
+
+# Fetch sensor data from the database
+def fetch_sensor_data(conn):
+    query = "SELECT * FROM dbo.sensor_data"
+    sensor_data = pd.read_sql(query, conn)
+    sensor_data['gsr'] = sensor_data['gsr_raw'].apply(shimmer.convert_ADC_to_GSR)
+    return sensor_data
+
+
+# Fetch measurement data from the database
+def fetch_measurement_data(conn):
+    query = "SELECT * FROM dbo.measurement"
+    measurement_data = pd.read_sql(query, conn)
+    return measurement_data
+
+
+# Fetch shimmer data from the database
+def fetch_shimmer_data(conn):
+    query = "SELECT * FROM dbo.shimmer"
+    shimmer_data = pd.read_sql(query, conn)
+    return shimmer_data
+
+
 # Initialize or update session state
 if "disabled" not in st.session_state:
     st.session_state.disabled = False
@@ -32,23 +80,42 @@ st.header('Dashboard Mindgames - PSV', divider='red')
 # Create tabs
 tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
 
+# Create a connection to the database
+conn = get_db_connection()
+
+player_data = fetch_player_data(conn)
+# Create a dictionary mapping player names to their IDs
+player_dict = dict(zip(player_data['name'], player_data['id']))
+
 with tab1:
-    
     # Form to start monitoring
     with st.form('start_form'):
         col1, col2, col3, col4 = st.columns(4, gap="large")
         with col1:
             st.selectbox('Game', ("Aristotle", "MoveSense"), index=None)
         with col2:
-            st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
-        submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True), disabled=st.session_state.disabled)
+            selected_player_name = st.selectbox('Player', options=list(player_dict.keys()), index=None)
+            submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True),
+                                                  disabled=st.session_state.disabled)
 
     if submit_button or st.session_state.disabled:
         if st.session_state.device is None:
             # Start streaming
-            st.session_state.device = ShimmerDevice('COM3')
+            st.session_state.device = ShimmerDevice(com_port, fake_fallback)
             st.session_state.device.start_streaming()
             st.toast('Shimmer connected', icon="🎉")
+
+        # Put the chosen game and player in the database
+        st.session_state.game = st.session_state.start_form['Game']
+        st.session_state.player = st.session_state.start_form['Player']
+        st.session_state.selected_player_id = player_dict[selected_player_name]
+
+        query = f"""
+         INSERT INTO measurement (player_id, shimmer_id, event, note)
+         VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'start_game', '{st.session_state.game}')
+         """
+        conn.cursor().execute(query)
+        conn.commit()
 
         # Ping form
         with st.form('ping_form', clear_on_submit=True):
@@ -57,116 +124,86 @@ with tab1:
 
         if submit_ping:
             new_annotation = {
-                'timestamp': st.session_state.line_chart_data.iloc[-1]['timestamp'], 
-                'value': ping_text, 
+                'timestamp': st.session_state.line_chart_data.iloc[-1]['timestamp'],
+                'value': ping_text,
                 'y': st.session_state.line_chart_data.iloc[-1]['gsr']
             }
             st.session_state.annotations_df = st.session_state.annotations_df.append(new_annotation, ignore_index=True)
             st.toast('Ping sent', icon="🎉")
-        
+
         colu1, colu2, colu3 = st.columns([1, 1, 0.2])
         with colu3:
             stop_button = st.button('Stop streaming', type="primary")
 
         placeholder = st.empty()
         # Continuous data generation loop
-        for seconds in range(25):
-            if seconds > 0:  # To prevent initial duplicate data generation             
-                # Append livestreamed values to DataFrame
-                live_data = st.session_state.device.get_live_data()
-                                
-                st.session_state.line_chart_data = pd.concat([st.session_state.line_chart_data, live_data]).drop_duplicates().reset_index(drop=True)
-                
-                # Keep only the last 40 datapoints
-                st.session_state.line_chart_data = st.session_state.line_chart_data.tail(200)
+        while True:
+            # Append livestreamed values to DataFrame
+            live_data = st.session_state.device.get_live_data()
 
-                # Ensure annotations are in sync with the live data
-                annotations_data_tail = st.session_state.annotations_df[st.session_state.annotations_df['timestamp'] >= st.session_state.line_chart_data['timestamp'].min()]
+            st.session_state.line_chart_data = pd.concat(
+                [st.session_state.line_chart_data, live_data]).drop_duplicates().reset_index(drop=True)
 
-                # Build the GSR line chart
-                gsr_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
-                    ["gsr"],
-                    as_=['Measurement', 'value']
-                ).mark_line().encode(
-                    x=alt.X('timestamp:T', axis=alt.Axis(title='Timestamp')),
-                    y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
-                    color='Measurement:N'
-                ).interactive()
+            # Keep only the last 80 datapoints, to create scrolling window effect
+            st.session_state.line_chart_data = st.session_state.line_chart_data.tail(80)
 
-                # Update annotations to move with the data
-                annotation_layer = (
-                    alt.Chart(annotations_data_tail)
-                    .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
-                    .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
-                )
+            # Ensure annotations are in sync with the live data
+            annotations_data_tail = st.session_state.annotations_df[
+                st.session_state.annotations_df['timestamp'] >= st.session_state.line_chart_data['timestamp'].min()]
 
-                # Show chart
-                combined_chart_gsr = gsr_chart + annotation_layer
+            # Build the GSR line chart
+            gsr_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
+                ["gsr"],
+                as_=['Measurement', 'value']
+            ).mark_line().encode(
+                x=alt.X('timestamp:T', axis=alt.Axis(title='Timestamp')),
+                y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
+                color='Measurement:N'
+            ).interactive()
 
-                # Build the PPG line chart
-                ppg_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
-                    ["ppg_raw"],
-                    as_=['Measurement', 'value']
-                ).mark_line().encode(
-                    x='timestamp:T',
-                    y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
-                    color='Measurement:N'
-                ).interactive()
+            # Build the GSR_raw line chart
+            gsr_raw_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
+                ["gsr_raw"],
+                as_=['Measurement', 'value']
+            ).mark_line().encode(
+                x=alt.X('timestamp:T', axis=alt.Axis(title='Timestamp')),
+                y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
+                color='Measurement:N'
+            ).interactive()
 
-                with placeholder.container():
-                    st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
-                    st.altair_chart(ppg_chart, theme=None, use_container_width=True)
-                    time.sleep(1)
+            # Update annotations to move with the data
+            annotation_layer = (
+                alt.Chart(annotations_data_tail)
+                .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
+                .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
+            )
 
-            if stop_button or seconds == 24:
+            # Show chart
+            combined_chart_gsr = gsr_chart + annotation_layer
+
+            # Build the PPG line chart
+            ppg_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
+                ["ppg_raw"],
+                as_=['Measurement', 'value']
+            ).mark_line().encode(
+                x='timestamp:T',
+                y=alt.Y('value:Q', scale=alt.Scale(nice=True)),
+                color='Measurement:N'
+            ).interactive()
+
+            with placeholder.container():
+                st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
+                st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
+                st.altair_chart(ppg_chart, theme=None, use_container_width=True)
+                time.sleep(1)
+
+            if stop_button:
                 st.session_state.device.stop_streaming()
                 st.session_state.device = None
                 st.toast('Shimmer disconnected', icon="🔌")
                 break
 
 with tab2:
-    # Database connection function
-    def get_db_connection():
-        try:
-            conn = pyodbc.connect(
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                f"SERVER={config.server_host};"
-                f"DATABASE=PSV;"
-                f"UID=team;"
-                f"PWD={config.password}"
-            )
-            return conn
-        except pyodbc.Error as e:
-            st.error(f"Database connection failed: {e}")
-            st.stop()
-
-    # Fetch sensor data from the database
-    def fetch_sensor_data(conn):
-        query = "SELECT * FROM dbo.sensor_data"
-        sensor_data = pd.read_sql(query, conn)
-        sensor_data['gsr'] = sensor_data['gsr_raw'].apply(shimmer.convert_ADC_to_GSR)
-        return sensor_data
-
-    # Fetch measurement data from the database
-    def fetch_measurement_data(conn):
-        query = "SELECT * FROM dbo.measurement"
-        measurement_data = pd.read_sql(query, conn)
-        return measurement_data
-
-    # Fetch shimmer data from the database
-    def fetch_shimmer_data(conn):
-        query = "SELECT * FROM dbo.shimmer"
-        shimmer_data = pd.read_sql(query, conn)
-        return shimmer_data
-
-    # Main function to fetch and display data
-    def main():
-        # Create a connection to the database
-        conn = get_db_connection()
-
-    # Create a connection to the database
-    conn = get_db_connection()
-
     # Fetch data
     sensor_data = fetch_sensor_data(conn)
     measurement_data = fetch_measurement_data(conn)

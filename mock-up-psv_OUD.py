@@ -60,7 +60,7 @@ with tab1:
     if submit_button or st.session_state.disabled:
 
         # Start streaming
-        device = ShimmerDevice('COM3')
+        device = ShimmerDevice('COM8')
         device.start_streaming()
         st.toast('Shimmer connected', icon="🎉")
 
