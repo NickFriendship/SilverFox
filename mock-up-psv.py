@@ -12,13 +12,14 @@ import neurokit2 as nk
 
 # Config of variables
 com_port = 'COM8'
-fake_fallback = True
+fake_fallback = False
+
 
 # Fetch player data from the database
-def fetch_player_data(conn):
-    query = "SELECT * FROM dbo.player"
-    player_data = pd.read_sql(query, conn)
-    return player_data
+def fetch_player_data(con):
+    qry = "SELECT * FROM dbo.player"
+    player_dt = pd.read_sql(qry, con)
+    return player_dt
 
 
 def get_db_connection():
@@ -72,10 +73,11 @@ if "annotations_df" not in st.session_state:
     st.session_state.annotations_df = pd.DataFrame(columns=["timestamp", "value", "y"])
 
 # Wide page
-st.set_page_config(layout="wide", page_title="PSV Mindgames Dashboard", page_icon="⚽")
+st.set_page_config(layout="wide", page_title="PSV Stress Dashboard", page_icon="⚽")
 
 # Title
-st.header('Dashboard Mindgames - PSV', divider='red')
+# st.header('Dashboard Mindgames - PSV', divider='red')
+st.markdown("<h1 style='text-align: center; margin-top: -30px;'>PSV Stress visualisation</h1>", unsafe_allow_html=True)
 
 # Create tabs
 tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
@@ -90,11 +92,11 @@ player_dict = dict(zip(player_data['name'], player_data['id']))
 with tab1:
     # Form to start monitoring
     with st.form('start_form'):
-        col1, col2, col3, col4 = st.columns(4, gap="large")
+        col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.selectbox('Game', ("Aristotle", "MoveSense"), index=None)
+            game = st.selectbox('Game', ("Aristotle", "MoveSense", "Stack Tower"), index=None, key='game')
         with col2:
-            selected_player_name = st.selectbox('Player', options=list(player_dict.keys()), index=None)
+            selected_player_name = st.selectbox('Player', options=list(player_dict.keys()), index=None, key='player')
             submit_button = st.form_submit_button("Start", on_click=lambda: setattr(st.session_state, 'disabled', True),
                                                   disabled=st.session_state.disabled)
 
@@ -106,13 +108,13 @@ with tab1:
             st.toast('Shimmer connected', icon="🎉")
 
         # Put the chosen game and player in the database
-        st.session_state.game = st.session_state.start_form['Game']
-        st.session_state.player = st.session_state.start_form['Player']
-        st.session_state.selected_player_id = player_dict[selected_player_name]
+        st.session_state.selected_game = st.session_state.game
+        st.session_state.selected_player = st.session_state.player
+        st.session_state.selected_player_id = player_dict[st.session_state.player]
 
         query = f"""
          INSERT INTO measurement (player_id, shimmer_id, event, note)
-         VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'start_game', '{st.session_state.game}')
+         VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'start_game', '{st.session_state.selected_game}')
          """
         conn.cursor().execute(query)
         conn.commit()
@@ -123,12 +125,13 @@ with tab1:
             submit_ping = st.form_submit_button("Send ping")
 
         if submit_ping:
-            new_annotation = {
-                'timestamp': st.session_state.line_chart_data.iloc[-1]['timestamp'],
-                'value': ping_text,
-                'y': st.session_state.line_chart_data.iloc[-1]['gsr']
-            }
-            st.session_state.annotations_df = st.session_state.annotations_df.append(new_annotation, ignore_index=True)
+            new_annotation = pd.DataFrame({
+                'timestamp': [st.session_state.line_chart_data.iloc[-1]['timestamp']],
+                'value': [ping_text],
+                'y': [st.session_state.line_chart_data.iloc[-1]['gsr']]
+            })
+            st.session_state.annotations_df = pd.concat([st.session_state.annotations_df, new_annotation],
+                                                        ignore_index=True)
             st.toast('Ping sent', icon="🎉")
 
         colu1, colu2, colu3 = st.columns([1, 1, 0.2])
@@ -161,6 +164,15 @@ with tab1:
                 color='Measurement:N'
             ).interactive()
 
+            # Update annotations to move with the data
+            annotation_layer = (
+                alt.Chart(annotations_data_tail)
+                .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
+                .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
+            )
+            # Show chart
+            combined_chart_gsr = gsr_chart + annotation_layer
+
             # Build the GSR_raw line chart
             gsr_raw_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
                 ["gsr_raw"],
@@ -171,15 +183,7 @@ with tab1:
                 color='Measurement:N'
             ).interactive()
 
-            # Update annotations to move with the data
-            annotation_layer = (
-                alt.Chart(annotations_data_tail)
-                .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
-                .encode(x=alt.X("timestamp:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
-            )
 
-            # Show chart
-            combined_chart_gsr = gsr_chart + annotation_layer
 
             # Build the PPG line chart
             ppg_chart = alt.Chart(st.session_state.line_chart_data).transform_fold(
@@ -192,9 +196,9 @@ with tab1:
             ).interactive()
 
             with placeholder.container():
-                st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
                 st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
                 st.altair_chart(ppg_chart, theme=None, use_container_width=True)
+                st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
                 time.sleep(1)
 
             if stop_button:
@@ -204,68 +208,69 @@ with tab1:
                 break
 
 with tab2:
-    # Fetch data
-    sensor_data = fetch_sensor_data(conn)
-    measurement_data = fetch_measurement_data(conn)
-    shimmer_data = fetch_shimmer_data(conn)
-    st.toast('Database connecting', icon="🔌")
-
-    # Create box with filter
-    with st.expander("Filter"):
-        col1, col2, col3, col4 = st.columns(4, gap="large")
-        with col1:
-            start_date = st.date_input("Start date", sensor_data['datetime'].min().date())
-        with col2:
-            end_date = st.date_input("End date", sensor_data['datetime'].max().date())
-        with col3:
-            st.selectbox('Training type', ("aristotle", "MoveSense"), index=None)
-        with col4:
-            st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
-
-    # Filter data based on user input
-    filtered_data = sensor_data[
-        (sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
-
-    # calculate the peaks from raw ppg
-    peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=100)
-    hrv_time = nk.hrv_time(peaks, sampling_rate=100, show=True)
-
-    # Calculate the heart rate
-    rr_intervals_s = np.array(hrv_time['HRV_MeanNN']) / 1000.0
-    average_rr_interval_s = np.mean(rr_intervals_s)
-    heart_rate = 60 / average_rr_interval_s
-
-    # Create columns for metrics
-    col1, col2, col3, col4 = st.columns(4, gap="large")
-
-    # Display average Heart rate in a box
-    col1.metric("Average Heart rate", f"{heart_rate:.0f} bpm")
-
-    # Display max HRV in a box
-    max_hrv = hrv_time['HRV_MaxNN'].iloc[0]
-    col2.metric("Max HRV", f"{max_hrv:.0f} ms")
-
-    # Display minimum HRV in a box
-    min_hrv = hrv_time['HRV_MinNN'].iloc[0]
-    col3.metric("Min HRV", f"{min_hrv:.0f} ms")
-
-    # Display average HRV in a box
-    average_hrv = hrv_time['HRV_MeanNN'].iloc[0]
-    col4.metric("Average HRV", f"{average_hrv:.0f} ms")
-
-    # Create a selection interval for the date range slider
-    date_range = alt.selection_interval(bind='scales', encodings=['x', 'y'])
-
-    # Create an Altair line chart with the filtered data and add the selection
-    alt_chart = alt.Chart(filtered_data).mark_line().encode(
-        x='datetime:T',
-        y='gsr:Q',
-        tooltip=['datetime', 'gsr']
-    ).add_selection(
-        date_range
-    ).properties(
-        title='GSR (galvanic skin response)'
-    )
-
-    # Display the Altair chart
-    st.altair_chart(alt_chart, use_container_width=True)
+    pass
+    # # Fetch data
+    # sensor_data = fetch_sensor_data(conn)
+    # measurement_data = fetch_measurement_data(conn)
+    # shimmer_data = fetch_shimmer_data(conn)
+    # st.toast('Database connecting', icon="🔌")
+    #
+    # # Create box with filter
+    # with st.expander("Filter"):
+    #     col1, col2, col3, col4 = st.columns(4, gap="large")
+    #     with col1:
+    #         start_date = st.date_input("Start date", sensor_data['datetime'].min().date())
+    #     with col2:
+    #         end_date = st.date_input("End date", sensor_data['datetime'].max().date())
+    #     with col3:
+    #         st.selectbox('Training type', ("aristotle", "MoveSense"), index=None)
+    #     with col4:
+    #         st.selectbox('Player', ("Luuk de Jong", "Een andere speler van PSV"), index=None)
+    #
+    # # Filter data based on user input
+    # filtered_data = sensor_data[
+    #     (sensor_data['datetime'].dt.date >= start_date) & (sensor_data['datetime'].dt.date <= end_date)]
+    #
+    # # calculate the peaks from raw ppg
+    # peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=100)
+    # hrv_time = nk.hrv_time(peaks, sampling_rate=100, show=True)
+    #
+    # # Calculate the heart rate
+    # rr_intervals_s = np.array(hrv_time['HRV_MeanNN']) / 1000.0
+    # average_rr_interval_s = np.mean(rr_intervals_s)
+    # heart_rate = 60 / average_rr_interval_s
+    #
+    # # Create columns for metrics
+    # col1, col2, col3, col4 = st.columns(4, gap="large")
+    #
+    # # Display average Heart rate in a box
+    # col1.metric("Average Heart rate", f"{heart_rate:.0f} bpm")
+    #
+    # # Display max HRV in a box
+    # max_hrv = hrv_time['HRV_MaxNN'].iloc[0]
+    # col2.metric("Max HRV", f"{max_hrv:.0f} ms")
+    #
+    # # Display minimum HRV in a box
+    # min_hrv = hrv_time['HRV_MinNN'].iloc[0]
+    # col3.metric("Min HRV", f"{min_hrv:.0f} ms")
+    #
+    # # Display average HRV in a box
+    # average_hrv = hrv_time['HRV_MeanNN'].iloc[0]
+    # col4.metric("Average HRV", f"{average_hrv:.0f} ms")
+    #
+    # # Create a selection interval for the date range slider
+    # date_range = alt.selection_interval(bind='scales', encodings=['x', 'y'])
+    #
+    # # Create an Altair line chart with the filtered data and add the selection
+    # alt_chart = alt.Chart(filtered_data).mark_line().encode(
+    #     x='datetime:T',
+    #     y='gsr:Q',
+    #     tooltip=['datetime', 'gsr']
+    # ).add_selection(
+    #     date_range
+    # ).properties(
+    #     title='GSR (galvanic skin response)'
+    # )
+    #
+    # # Display the Altair chart
+    # st.altair_chart(alt_chart, use_container_width=True)

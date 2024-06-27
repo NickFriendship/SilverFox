@@ -1,4 +1,5 @@
 import time
+import threading
 
 import pyodbc
 import pandas as pd
@@ -6,6 +7,14 @@ import re
 from serial import Serial
 from pyshimmer import ShimmerBluetooth, DEFAULT_BAUDRATE, DataPacket, EChannelType
 import config
+
+
+def connect_db():
+    cnxn = pyodbc.connect(
+        driver="{ODBC Driver 17 for SQL Server}", server=config.server_host, database="PSV",
+        uid="team", pwd=config.password)
+    cursor = cnxn.cursor()
+    return cnxn, cursor
 
 
 class ShimmerDevice:
@@ -31,10 +40,7 @@ class ShimmerDevice:
 
         self.shim_dev.add_stream_callback(self.handler)
 
-        self.cnxn = pyodbc.connect(
-            driver="{ODBC Driver 17 for SQL Server}", server=config.server_host, database="PSV",
-            uid="team", pwd=config.password)
-        self.cursor = self.cnxn.cursor()
+        self.cnxn, self.cursor = connect_db()
 
         # Updating the shimmer info in the database
         self.cursor.execute("""MERGE INTO dbo.shimmer AS target
@@ -106,6 +112,36 @@ def convert_ADC_to_GSR(gsr_raw_value):
 class FakeShimmerBluetooth:
     def __init__(self):
         self._initialized = False
+        self.index = 0
+        self.stop_thread = False
+
+        self.live_data = pd.DataFrame(columns=['timestamp', 'gsr_raw', 'ppg_raw'])
+
+        # Establish a connection to the database
+        self.cnxn, self.cursor = connect_db()
+
+        # Fetch the data from the database
+        self.data = self.fetch_data()
+
+    def fetch_data(self):
+        self.cursor.execute("""
+            WITH StreamData AS (
+                SELECT event,
+                       datetime
+                FROM [PSV].[dbo].[measurement]
+                WHERE shimmer_id = 3 AND event IN ('fake_start', 'fake_end')
+            )
+            SELECT *
+            FROM [PSV].[dbo].[sensor_data]
+            WHERE datetime BETWEEN (SELECT datetime FROM StreamData WHERE event = 'fake_start') 
+                              AND (SELECT datetime FROM StreamData WHERE event = 'fake_end')
+        """)
+
+        # Fetch the results and convert them to a DataFrame
+        data = self.cursor.fetchall()
+        data = pd.DataFrame.from_records(data, columns=[column[0] for column in self.cursor.description])
+
+        return data
 
     def initialize(self):
         self._initialized = True
@@ -120,10 +156,29 @@ class FakeShimmerBluetooth:
         pass
 
     def start_streaming(self):
-        pass
+        def stream_data():
+            while self.index < len(self.data):
+                if self.stop_thread:  # Check the flag in each iteration
+                    break
+                self.handler(self.data.iloc[self.index])
+                self.index += 1
+                time.sleep(0.25)  # Wait for 1 second before the next iteration
+
+        threading.Thread(target=stream_data).start()
+
+    def handler(self, pkt):
+        timestamp = pkt['data_timestamp']
+        gsr_raw = pkt['gsr_raw']
+        ppg_raw = pkt['ppg_raw']
+        # print(pkt.channels)
+        # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
+
+        new_row = pd.DataFrame({'timestamp': [timestamp], 'gsr_raw': [gsr_raw], 'ppg_raw': [ppg_raw],
+                                'gsr': [convert_ADC_to_GSR(gsr_raw)]})
+        self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
 
     def stop_streaming(self):
-        pass
+        self.stop_thread = True
 
     def shutdown(self):
         pass
