@@ -1,3 +1,4 @@
+import atexit
 import time
 import threading
 import pyodbc
@@ -19,13 +20,18 @@ def connect_db():
 
 class ShimmerDevice:
 
-    def __init__(self, com_port, fake_fallback: bool = False):
+    def __init__(self, com_port, fake_fallback: bool = False, live_upload: bool = False):
+        # register exit methods
+        atexit.register(self.safe_stop)
+
         self.live_data = pd.DataFrame(columns=['gsr',
                                                'datetime',
                                                'timestamp',
                                                'gsr_raw',
                                                'ppg_raw'])
         self.com_port = com_port
+        self.live_upload = live_upload
+
         try:
             self.serial = Serial(com_port, DEFAULT_BAUDRATE)
             self.shim_dev = ShimmerBluetooth(self.serial)
@@ -73,6 +79,10 @@ OUTPUT INSERTED.id;
         # print(pkt.channels)
         # print(f'Received new data point at {timestamp}: GSR {gsr_raw}, PPG {ppg_raw}')
 
+        # Ignore the first few seconds of data coming in as it's unreliable
+        if (curtime - self.init_time).total_seconds() < 4:
+            return
+
         new_row = pd.DataFrame({'datetime': [curtime],
                                 'gsr': [convert_ADC_to_GSR(gsr_raw)],
                                 'timestamp': [timestamp],
@@ -81,13 +91,11 @@ OUTPUT INSERTED.id;
                                 })
         self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
 
-        # Ignore the first few seconds of data coming in as it's unreliable
-        if (curtime - self.init_time).total_seconds() < 4:
-            return
-
-        self.cursor.execute("insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
-                            self.id, timestamp, gsr_raw, ppg_raw)
-        self.cnxn.commit()
+        if self.live_upload:
+            self.cursor.execute(
+                "insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
+                self.id, timestamp, gsr_raw, ppg_raw)
+            self.cnxn.commit()
 
     def get_live_data(self):
         return self.live_data
@@ -95,11 +103,50 @@ OUTPUT INSERTED.id;
     def start_streaming(self):
         self.shim_dev.start_streaming()
 
-    def stop_streaming(self):
+    def stop_streaming(self, stop_event: bool = True, upload_data: bool = True):
         self.shim_dev.stop_streaming()
-        time.sleep(1)
-        self.shim_dev.shutdown()
+        if stop_event:
+            # Crate stop_game event based on the device's last start_game event
+            query = """
+            WITH RecentPlayerId AS (
+                SELECT TOP 1 player_id, note
+                FROM measurement
+                WHERE shimmer_id = ? AND event = 'start_game'
+                ORDER BY datetime DESC
+            )
+            INSERT INTO measurement (player_id, shimmer_id, event, note)
+            SELECT player_id, ?, 'stop_game', note
+            FROM RecentPlayerId
+            """
+            self.cursor.execute(query, (self.id, self.id))
+            self.cnxn.commit()
 
+        if upload_data:
+            for index, row in self.live_data.iterrows():
+                self.cursor.execute(
+                    """INSERT INTO sensor_data(datetime, shimmer_id, data_timestamp, gsr_raw, ppg_raw)
+                    VALUES (?, ?, ?, ?, ?)""",
+                    row['datetime'], self.id, row['timestamp'], row['gsr_raw'], row['ppg_raw'])
+                self.cnxn.commit()
+
+                # Clear the live_data DataFrame
+                self.live_data = pd.DataFrame(columns=['gsr', 'datetime', 'timestamp', 'gsr_raw', 'ppg_raw'])
+
+        self.live_data = pd.DataFrame(columns=['gsr', 'datetime', 'timestamp', 'gsr_raw', 'ppg_raw'])
+        self.shim_dev.shutdown()
+        self.shim_dev._initialized = False
+
+    def safe_stop(self):
+        if self.shim_dev.initialized():
+            self.stop_streaming()
+        if self.cursor:
+            self.cursor.close()
+        if self.cnxn:
+            self.cnxn.close()
+            print("Database connection closed.")
+
+    def __del__(self):
+        self.safe_stop()
 
 # noinspection DuplicatedCode
 def convert_ADC_to_GSR(gsr_raw_value):
@@ -199,3 +246,6 @@ class FakeShimmerBluetooth:
 
     def shutdown(self):
         pass
+
+    def initialized(self):
+        return self._initialized

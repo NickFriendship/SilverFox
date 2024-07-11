@@ -2,6 +2,7 @@ import sys
 import pyodbc
 import config
 import time
+import atexit
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,8 +10,6 @@ import altair as alt
 import neurokit2 as nk
 import shimmer
 from shimmer import ShimmerDevice
-
-# from sqlalchemy import create_engine
 
 # Config of variables
 fake_fallback = False
@@ -20,13 +19,6 @@ if len(sys.argv) > 1 and "COM" in sys.argv[1]:
     com_port = sys.argv[1]
 else:
     com_port = "COM8"  # Default value if no input is provided
-
-
-# Fetch player data from the database
-def fetch_player_data(con):
-    qry = "SELECT * FROM dbo.player"
-    player_dt = pd.read_sql(qry, con)
-    return player_dt
 
 
 def get_db_connection():
@@ -42,6 +34,20 @@ def get_db_connection():
     except pyodbc.Error as e:
         st.error(f"Database connection failed: {e}")
         st.stop()
+
+
+def stop_stream():
+    if st.session_state.device is not None:
+        st.session_state.device.stop_streaming()
+        st.session_state.device = None
+        st.toast('Shimmer disconnected', icon="🔌")
+
+
+# Fetch player data from the database
+def fetch_player_data(con):
+    qry = "SELECT * FROM dbo.player"
+    player_dt = pd.read_sql(qry, con)
+    return player_dt
 
 
 # Fetch sensor data from the database
@@ -77,71 +83,73 @@ def fetch_shimmer_data(conn):
 
 
 def fetch_measurement_ranges(conn):
-    # query = """
-    # WITH StartGame AS (
-    #     SELECT
-    #         player_id,
-    #         shimmer_id,
-    #         datetime AS start_time,
-    #         ROW_NUMBER() OVER (PARTITION BY player_id, shimmer_id ORDER BY datetime) AS row_num
-    #     FROM dbo.measurement
-    #     WHERE event = 'start_game'
-    # ),
-    # StopGame AS (
-    #     SELECT
-    #         player_id,
-    #         shimmer_id,
-    #         datetime AS end_time,
-    #         ROW_NUMBER() OVER (PARTITION BY player_id, shimmer_id ORDER BY datetime) AS row_num
-    #     FROM dbo.measurement
-    #     WHERE event = 'stop_game'
-    # ),
-    # MeasurementPairs AS (
-    #     SELECT
-    #         sg.player_id,
-    #         sg.shimmer_id,
-    #         sg.start_time,
-    #         st.end_time
-    #     FROM StartGame sg
-    #     INNER JOIN StopGame st ON sg.player_id = st.player_id AND sg.shimmer_id = st.shimmer_id AND sg.row_num = st.row_num
-    #     WHERE sg.start_time < st.end_time
-    # )
-    # SELECT
-    #     player_id,
-    #     shimmer_id,
-    #     start_time,
-    #     end_time
-    # FROM MeasurementPairs
-    # ORDER BY start_time DESC;
-    # """
-
     query = """
-        WITH DataWithPreviousTime AS (
-        SELECT *,
-               LAG(datetime) OVER (ORDER BY datetime) AS PreviousTime
-        FROM dbo.sensor_data
+    WITH StartGame AS (
+        SELECT
+            player_id,
+            shimmer_id,
+            datetime AS start_time,
+            ROW_NUMBER() OVER (PARTITION BY player_id, shimmer_id ORDER BY datetime DESC) AS row_num
+        FROM dbo.measurement
+        WHERE event = 'start_game'
     ),
-    DataWithStreamId AS (
-        SELECT *,
-               SUM(CASE WHEN DATEDIFF(SECOND, PreviousTime, datetime) > 1 THEN 1 ELSE 0 END) OVER (ORDER BY datetime) AS StreamId
-        FROM DataWithPreviousTime
+    StopGame AS (
+        SELECT
+            player_id,
+            shimmer_id,
+            datetime AS end_time,
+            ROW_NUMBER() OVER (PARTITION BY player_id, shimmer_id ORDER BY datetime DESC) AS row_num
+        FROM dbo.measurement
+        WHERE event = 'stop_game'
     ),
-    StreamDetails AS (
-        SELECT StreamId,
-               MIN(datetime) AS start_time,
-               MAX(datetime) AS end_time
-        FROM DataWithStreamId
-        GROUP BY StreamId
+    MeasurementPairs AS (
+        SELECT
+            sg.player_id,
+            sg.shimmer_id,
+            sg.start_time,
+            st.end_time
+        FROM StartGame sg
+        INNER JOIN StopGame st ON sg.player_id = st.player_id AND sg.shimmer_id = st.shimmer_id AND sg.row_num = st.row_num
+        WHERE sg.start_time < st.end_time
     )
     SELECT
+        player_id,
+        shimmer_id,
         start_time,
         end_time
-    FROM StreamDetails
+    FROM MeasurementPairs
     ORDER BY start_time DESC;
     """
+
+    # query = """
+    # WITH DataWithPreviousTime AS (
+    #     SELECT *,
+    #            LAG(datetime) OVER (ORDER BY datetime) AS PreviousTime
+    #     FROM dbo.sensor_data
+    # ),
+    # DataWithStreamId AS (
+    #     SELECT *,
+    #            SUM(IIF(DATEDIFF(SECOND, PreviousTime, datetime) > 1, 1, 0)) OVER (ORDER BY datetime) AS StreamId
+    #     FROM DataWithPreviousTime
+    # ),
+    # StreamDetails AS (
+    #     SELECT StreamId,
+    #            MIN(datetime) AS start_time,
+    #            MAX(datetime) AS end_time
+    #     FROM DataWithStreamId
+    #     GROUP BY StreamId
+    # )
+    # SELECT
+    #     start_time,
+    #     end_time
+    # FROM StreamDetails
+    # ORDER BY start_time DESC;
+    # """
     measurement_ranges = pd.read_sql(query, conn)
     return measurement_ranges
 
+
+atexit.register(stop_stream)
 
 # Initialize or update session state
 if "disabled" not in st.session_state:
@@ -165,6 +173,9 @@ st.markdown("<h1 style='text-align: center; margin-top: -30px;'>PSV Stress visua
 
 # Create tabs
 tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
+
+# st.query_params returns a dictionary, where the value is a list of strings
+current_tab = st.query_params.get("tab", ["Live monitoring"])[0]
 
 # Create a connection to the database
 conn = get_db_connection()
@@ -191,17 +202,17 @@ with tab1:
             st.session_state.device.start_streaming()
             st.toast('Shimmer connected', icon="🎉")
 
-        # Put the chosen game and player in the database
-        st.session_state.selected_game = st.session_state.game
-        st.session_state.selected_player = st.session_state.player
-        st.session_state.selected_player_id = player_dict[st.session_state.player]
+            # Put the chosen game and player in the database
+            st.session_state.selected_game = st.session_state.game
+            st.session_state.selected_player = st.session_state.player
+            st.session_state.selected_player_id = player_dict[st.session_state.player]
 
-        query = f"""
-         INSERT INTO measurement (player_id, shimmer_id, event, note)
-         VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'start_game', '{st.session_state.selected_game}')
-         """
-        conn.cursor().execute(query)
-        conn.commit()
+            query = f"""
+             INSERT INTO measurement (player_id, shimmer_id, event, note)
+             VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'start_game', '{st.session_state.selected_game}')
+             """
+            conn.cursor().execute(query)
+            conn.commit()
 
         # Ping form
         with st.form('ping_form', clear_on_submit=True):
@@ -232,7 +243,7 @@ with tab1:
                 [st.session_state.line_chart_data, live_data]).drop_duplicates().reset_index(drop=True)
 
             # Keep only the last 80 datapoints, to create scrolling window effect
-            st.session_state.line_chart_data = st.session_state.line_chart_data.tail(80)
+            st.session_state.line_chart_data = st.session_state.line_chart_data.tail(40)
 
             # Ensure annotations are in sync with the live data
             annotations_data_tail = st.session_state.annotations_df[
@@ -279,7 +290,7 @@ with tab1:
 
             with placeholder.container():
                 st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
-                st.altair_chart(ppg_chart, theme=None, use_container_width=True)
+                # st.altair_chart(ppg_chart, theme=None, use_container_width=True)
                 st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
                 time.sleep(1)
 
@@ -287,12 +298,6 @@ with tab1:
                 st.session_state.device.stop_streaming()
                 st.session_state.device = None
                 st.toast('Shimmer disconnected', icon="🔌")
-                query = f"""
-                 INSERT INTO measurement (player_id, shimmer_id, event, note)
-                 VALUES ({st.session_state.selected_player_id}, {st.session_state.device.id}, 'stop_game', '{st.session_state.selected_game}')
-                 """
-                conn.cursor().execute(query)
-                conn.commit()
                 break
 
 with tab2:
