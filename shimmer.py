@@ -14,8 +14,7 @@ def connect_db():
     cnxn = pyodbc.connect(
         driver="{ODBC Driver 17 for SQL Server}", server=config.server_host, database="PSV",
         uid="team", pwd=config.password)
-    cursor = cnxn.cursor()
-    return cnxn, cursor
+    return cnxn
 
 
 class ShimmerDevice:
@@ -43,6 +42,7 @@ class ShimmerDevice:
                 self.shim_dev = FakeShimmerBluetooth()
             else:
                 raise e
+
         self.shim_dev.initialize()
         self.init_time = datetime.now()
 
@@ -52,21 +52,20 @@ class ShimmerDevice:
 
         self.shim_dev.add_stream_callback(self.handler)
 
-        self.cnxn, self.cursor = connect_db()
+        self.cnxn = connect_db()
 
-        # Updating the shimmer info in the database
-        self.cursor.execute("""MERGE INTO dbo.shimmer AS target
-USING (SELECT ?, ?, ?) AS source (name, port, battery_perc)
-ON (target.name = source.name)
-WHEN MATCHED THEN
-    UPDATE SET target.port = source.port, target.battery_perc = source.battery_perc
-WHEN NOT MATCHED THEN
-    INSERT (name, port, battery_perc)
-    VALUES (source.name, source.port, source.battery_perc)
-OUTPUT INSERTED.id;
-            """,
-                            self.dev_name, self.com_port, self.batt)
-        self.id = self.cursor.fetchone()[0]
+        with self.cnxn.cursor() as cursor:
+            cursor.execute("""MERGE INTO dbo.shimmer AS target
+        USING (SELECT ?, ?, ?) AS source (name, port, battery_perc)
+        ON (target.name = source.name)
+        WHEN MATCHED THEN
+            UPDATE SET target.port = source.port, target.battery_perc = source.battery_perc
+        WHEN NOT MATCHED THEN
+            INSERT (name, port, battery_perc)
+            VALUES (source.name, source.port, source.battery_perc)
+        OUTPUT INSERTED.id;
+                    """, (self.dev_name, self.com_port, self.batt))
+            self.id = cursor.fetchone()[0]
 
         self.cnxn.commit()
 
@@ -92,10 +91,12 @@ OUTPUT INSERTED.id;
         self.live_data = pd.concat([self.live_data, new_row], ignore_index=True)
 
         if self.live_upload:
-            self.cursor.execute(
-                "insert into sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw) values (?, ?, ?, ?)",
-                self.id, timestamp, gsr_raw, ppg_raw)
-            self.cnxn.commit()
+            with self.cnxn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO sensor_data(shimmer_id, data_timestamp, gsr_raw, ppg_raw)
+                VALUES (?, ?, ?, ?)""",
+                    self.id, timestamp, gsr_raw, ppg_raw)
+                self.cnxn.commit()
 
     def get_live_data(self):
         return self.live_data
@@ -107,27 +108,29 @@ OUTPUT INSERTED.id;
         self.shim_dev.stop_streaming()
         if stop_event:
             # Crate stop_game event based on the device's last start_game event
-            query = """
-            WITH RecentPlayerId AS (
-                SELECT TOP 1 player_id, note
-                FROM measurement
-                WHERE shimmer_id = ? AND event = 'start_game'
-                ORDER BY datetime DESC
-            )
-            INSERT INTO measurement (player_id, shimmer_id, event, note)
-            SELECT player_id, ?, 'stop_game', note
-            FROM RecentPlayerId
-            """
-            self.cursor.execute(query, (self.id, self.id))
-            self.cnxn.commit()
+            with self.cnxn.cursor() as cursor:
+                query = """
+                WITH RecentPlayerId AS (
+                    SELECT TOP 1 player_id, note
+                    FROM measurement
+                    WHERE shimmer_id = ? AND event = 'start_game'
+                    ORDER BY datetime DESC
+                )
+                INSERT INTO measurement (player_id, shimmer_id, event, note)
+                SELECT player_id, ?, 'stop_game', note
+                FROM RecentPlayerId
+                """
+                cursor.execute(query, (self.id, self.id))
+                self.cnxn.commit()
 
         if upload_data:
             for index, row in self.live_data.iterrows():
-                self.cursor.execute(
-                    """INSERT INTO sensor_data(datetime, shimmer_id, data_timestamp, gsr_raw, ppg_raw)
-                    VALUES (?, ?, ?, ?, ?)""",
-                    row['datetime'], self.id, row['timestamp'], row['gsr_raw'], row['ppg_raw'])
-                self.cnxn.commit()
+                with self.cnxn.cursor() as cursor:
+                    cursor.execute(
+                        """INSERT INTO sensor_data(datetime, shimmer_id, data_timestamp, gsr_raw, ppg_raw)
+                        VALUES (?, ?, ?, ?, ?)""",
+                        row['datetime'], self.id, row['timestamp'], row['gsr_raw'], row['ppg_raw'])
+                    self.cnxn.commit()
 
                 # Clear the live_data DataFrame
                 self.live_data = pd.DataFrame(columns=['gsr', 'datetime', 'timestamp', 'gsr_raw', 'ppg_raw'])
@@ -139,8 +142,6 @@ OUTPUT INSERTED.id;
     def safe_stop(self):
         if self.shim_dev.initialized():
             self.stop_streaming()
-        if self.cursor:
-            self.cursor.close()
         if self.cnxn:
             self.cnxn.close()
             print("Database connection closed.")
@@ -182,30 +183,31 @@ class FakeShimmerBluetooth:
         self.live_data = pd.DataFrame(columns=['timestamp', 'gsr_raw', 'ppg_raw'])
 
         # Establish a connection to the database
-        self.cnxn, self.cursor = connect_db()
+        self.cnxn = connect_db()
 
         # Fetch the data from the database
         self.data = self.fetch_data()
 
     def fetch_data(self):
-        self.cursor.execute("""
-            WITH StreamData AS (
-                SELECT event,
-                       datetime
-                FROM [PSV].[dbo].[measurement]
-                WHERE shimmer_id = 3 AND event IN ('fake_start', 'fake_end')
-            )
-            SELECT *
-            FROM [PSV].[dbo].[sensor_data]
-            WHERE datetime BETWEEN (SELECT datetime FROM StreamData WHERE event = 'fake_start') 
-                              AND (SELECT datetime FROM StreamData WHERE event = 'fake_end')
-        """)
+        with self.cnxn.cursor() as cursor:
+            cursor.execute("""
+                WITH StreamData AS (
+                    SELECT event,
+                           datetime
+                    FROM [PSV].[dbo].[measurement]
+                    WHERE shimmer_id = 3 AND event IN ('fake_start', 'fake_end')
+                )
+                SELECT *
+                FROM [PSV].[dbo].[sensor_data]
+                WHERE datetime BETWEEN (SELECT datetime FROM StreamData WHERE event = 'fake_start') 
+                                  AND (SELECT datetime FROM StreamData WHERE event = 'fake_end')
+            """)
 
-        # Fetch the results and convert them to a DataFrame
-        data = self.cursor.fetchall()
-        data = pd.DataFrame.from_records(data, columns=[column[0] for column in self.cursor.description])
+            # Fetch the results and convert them to a DataFrame
+            data = cursor.fetchall()
+            data = pd.DataFrame.from_records(data, columns=[column[0] for column in self.cursor.description])
 
-        return data
+            return data
 
     def initialize(self):
         self._initialized = True

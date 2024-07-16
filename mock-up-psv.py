@@ -43,14 +43,12 @@ def stop_stream():
         st.toast('Shimmer disconnected', icon="🔌")
 
 
-# Fetch player data from the database
-def fetch_player_data(con):
+def fetch_player_data(conn):
     qry = "SELECT * FROM dbo.player"
-    player_dt = pd.read_sql(qry, con)
+    player_dt = pd.read_sql(qry, conn)
     return player_dt
 
 
-# Fetch sensor data from the database
 def fetch_sensor_data(conn):
     query = "SELECT * FROM dbo.sensor_data"
     sensor_data = pd.read_sql(query, conn)
@@ -89,6 +87,7 @@ def fetch_measurement_ranges(conn):
             player_id,
             shimmer_id,
             datetime AS start_time,
+            note AS game,
             ROW_NUMBER() OVER (PARTITION BY player_id, shimmer_id ORDER BY datetime DESC) AS row_num
         FROM dbo.measurement
         WHERE event = 'start_game'
@@ -107,7 +106,8 @@ def fetch_measurement_ranges(conn):
             sg.player_id,
             sg.shimmer_id,
             sg.start_time,
-            st.end_time
+            st.end_time,
+            sg.game
         FROM StartGame sg
         INNER JOIN StopGame st ON sg.player_id = st.player_id AND sg.shimmer_id = st.shimmer_id AND sg.row_num = st.row_num
         WHERE sg.start_time < st.end_time
@@ -116,7 +116,8 @@ def fetch_measurement_ranges(conn):
         player_id,
         shimmer_id,
         start_time,
-        end_time
+        end_time,
+        game
     FROM MeasurementPairs
     ORDER BY start_time DESC;
     """
@@ -149,6 +150,61 @@ def fetch_measurement_ranges(conn):
     return measurement_ranges
 
 
+def fetch_filtered_sensor_data(conn, start_time, end_time, shimmer_id):
+    query = """
+    SELECT * FROM dbo.sensor_data
+    WHERE datetime >= ? AND datetime <= ? AND shimmer_id = ?
+    """
+    params = (start_time, end_time, int(shimmer_id))
+    filtered_data = pd.read_sql(query, conn, params=params)
+    return filtered_data
+
+
+def send_event(conn, event, note=""):
+    # Check if player id and device id are set to prevent errors
+    if "selected_player_id" not in st.session_state or "device" not in st.session_state:
+        st.error("Player or device not selected")
+        return
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO measurement (player_id, shimmer_id, event, note)
+                VALUES (?, ?, ?, ?)
+            """, (st.session_state.selected_player_id, st.session_state.device.id, event, note))
+
+            conn.commit()
+    except Exception as e:
+        st.error(f"Failed to send event to database: {e}")
+
+
+def fetch_training_types(conn):
+    query = """
+    WITH CTE AS (
+        SELECT note,
+               -- Add a column for sorting purposes
+               IIF(note = 'None', 1, 0) AS SortOrder
+        FROM dbo.measurement
+        WHERE event = 'start_game'
+    )
+    SELECT DISTINCT note AS training_type, SortOrder
+    FROM CTE
+    ORDER BY SortOrder, note
+    """
+    games = pd.read_sql(query, conn)
+    return games['training_type'].tolist()
+
+
+def fetch_ping_events(conn, shimmer_id, start_time, end_time):
+    query = """
+    SELECT datetime, note FROM dbo.measurement
+    WHERE event = 'ping' AND shimmer_id = ? AND datetime >= ? AND datetime <= ?
+    """
+    params = (int(shimmer_id), start_time, end_time)
+    ping_events = pd.read_sql(query, conn, params=params)
+    return ping_events
+
+
 atexit.register(stop_stream)
 
 # Initialize or update session state
@@ -164,12 +220,24 @@ if "line_chart_data" not in st.session_state:
 if "annotations_df" not in st.session_state:
     st.session_state.annotations_df = pd.DataFrame(columns=["datetime", "value", "y"])
 
+if "annotations_hist_df" not in st.session_state:
+    st.session_state.annotations_hist_df = pd.DataFrame(columns=["datetime", "value", "y"])
+
 # Wide page
 st.set_page_config(layout="wide", page_title="PSV Stress Dashboard", page_icon="⚽")
 
 # Title
 # st.header('Dashboard Mindgames - PSV', divider='red')
-st.markdown("<h1 style='text-align: center; margin-top: -30px;'>PSV Stress visualisation</h1>", unsafe_allow_html=True)
+# st.markdown("<h1 style='text-align: center; margin-top: -30px;'>PSV Stress visualisation</h1>", unsafe_allow_html=True)
+col1, col2 = st.columns([1, 9])
+
+# Use the second column to display the logo
+with col1:
+    st.image("psv_logo.png", width=100)  # Adjust the width as needed
+
+# Use the first column for the rest of your app content
+with col2:
+    st.header("Stress Visualization Dashboard", divider='red')
 
 # Create tabs
 tab1, tab2 = st.tabs(["Live monitoring", "Historical data"])
@@ -181,6 +249,7 @@ current_tab = st.query_params.get("tab", ["Live monitoring"])[0]
 conn = get_db_connection()
 
 player_data = fetch_player_data(conn)
+
 # Create a dictionary mapping player names to their IDs
 player_dict = dict(zip(player_data['name'], player_data['id']))
 
@@ -227,6 +296,8 @@ with tab1:
             })
             st.session_state.annotations_df = pd.concat([st.session_state.annotations_df, new_annotation],
                                                         ignore_index=True)
+            send_event(conn, 'ping', ping_text)
+
             st.toast('Ping sent', icon="🎉")
 
         colu1, colu2, colu3 = st.columns([1, 1, 0.2])
@@ -291,45 +362,43 @@ with tab1:
             with placeholder.container():
                 st.altair_chart(combined_chart_gsr, theme=None, use_container_width=True)
                 # st.altair_chart(ppg_chart, theme=None, use_container_width=True)
-                st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
+                # st.altair_chart(gsr_raw_chart, theme=None, use_container_width=True)
                 time.sleep(1)
 
             if stop_button:
                 st.session_state.device.stop_streaming()
                 st.session_state.device = None
                 st.toast('Shimmer disconnected', icon="🔌")
-                break
+                st.rerun()
 
 with tab2:
     st.toast('Database connecting', icon="🔌")
 
     # Fetch data
     # sensor_data = fetch_sensor_data(conn)
-    sensor_data = fetch_recent_sensor_data(conn)
+    # sensor_data = fetch_recent_sensor_data(conn)
     measurement_data = fetch_measurement_data(conn)
     shimmer_data = fetch_shimmer_data(conn)
 
-    measurement_ranges = fetch_measurement_ranges(conn)
-    # Convert start_time to string for display purposes
-    measurement_ranges['start_time_str'] = measurement_ranges['start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
-
     # Create box with filter
     with st.expander("Filter"):
-        col1, col2, col3, col4, col5 = st.columns(5, gap="large")
+        col1, col2, col3 = st.columns(3)
+        # with col1:
+        #     start_date = st.date_input("Start date", sensor_data['datetime'].min().date())
+        # with col2:
+        #     end_date = st.date_input("End date", sensor_data['datetime'].max().date())
         with col1:
-            start_date = st.date_input("Start date", sensor_data['datetime'].min().date())
+            games = fetch_training_types(conn)
+            sel_game_hist = st.selectbox('Games', options=games, index=None, key='hist_game')
         with col2:
-            end_date = st.date_input("End date", sensor_data['datetime'].max().date())
+            sel_player_hist = st.selectbox('Player', options=list(player_dict.keys()), index=None, key='hist_player')
         with col3:
-            st.selectbox('Training type', ("aristotle", "MoveSense"), index=None)
-        with col4:
-            selected_player = st.selectbox('Player', options=list(player_dict.keys()), index=None, key='hist_player')
-        with col5:
             # Create a dropdown for selecting a measurement session
+            measurement_ranges = fetch_measurement_ranges(conn)
+            measurement_ranges['start_time_str'] = measurement_ranges['start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
             # Default index for usable datastream
-            target_start_time_str = "2024-07-03 15:07:51"
-
+            target_start_time_str = "2024-07-11 14:51:19"
             # Find the index of the target start time in the measurement_ranges dataframe
             default_index = measurement_ranges.index[
                 measurement_ranges['start_time_str'] == target_start_time_str].tolist()
@@ -347,16 +416,20 @@ with tab2:
     selected_range = measurement_ranges[measurement_ranges['start_time_str'] == selected_measurement_start].iloc[0]
 
     # Filter data based on user input
-    filtered_data = sensor_data.loc[
-        (sensor_data['datetime'] >= selected_range['start_time']) &
-        (sensor_data['datetime'] <= selected_range['end_time'])
-        ]
+    # filtered_data = sensor_data.loc[
+    #     (sensor_data['datetime'] >= selected_range['start_time']) &
+    #     (sensor_data['datetime'] <= selected_range['end_time'])
+    #     ]
 
     rate = 100
+    filtered_data = fetch_filtered_sensor_data(conn, selected_range['start_time'], selected_range['end_time'],
+                                               selected_range['shimmer_id'])
+
+    filtered_data['gsr'] = filtered_data['gsr_raw'].apply(shimmer.convert_ADC_to_GSR)
 
     # calculate the peaks from raw ppg
     peaks, info = nk.ppg_peaks(filtered_data['ppg_raw'], sampling_rate=rate)
-    # Step 1: Check if `peaks` is empty
+    # Check if `peaks` is empty
     if len(peaks) == 0:
         st.error("No peaks detected in the data. Please check the input data or adjust the peak detection parameters.")
     else:
@@ -394,7 +467,7 @@ with tab2:
     date_range = alt.selection_interval(bind='scales', encodings=['x', 'y'])
 
     # Create an Altair line chart with the filtered data and add the selection
-    alt_chart = alt.Chart(filtered_data).mark_line().encode(
+    gsr_chart = alt.Chart(filtered_data).mark_line().encode(
         x='datetime:T',
         y='gsr:Q',
         tooltip=['datetime', 'gsr']
@@ -404,5 +477,50 @@ with tab2:
         title='GSR (galvanic skin response)'
     )
 
-    # Display the Altair chart
-    st.altair_chart(alt_chart, use_container_width=True)
+    # ping_events = fetch_ping_events(conn, selected_range['shimmer_id'], selected_range['start_time'], selected_range['end_time'])
+    #
+    # if not 1 or ping_events.empty:
+    #     for index, row in ping_events.iterrows():
+    #         # Find the closest datetime in line_chart_data to the ping's datetime
+    #         closest_datetime_index = filtered_data['datetime'].sub(row['datetime']).abs().idxmin()
+    #         closest_datetime_row = filtered_data.iloc[closest_datetime_index]
+    #
+    #         # Create a new annotation
+    #         new_annotation = pd.DataFrame({
+    #             'datetime': [closest_datetime_row['datetime']],
+    #             'value': [row['note']],
+    #             'y': [closest_datetime_row['gsr']]
+    #         })
+    #
+    #         st.session_state.annotations_hist_df = pd.concat([st.session_state.annotations_hist_df, new_annotation],
+    #                                                          ignore_index=True)
+    #
+    #     print(ping_events)
+    #
+    #     # annotations_data_tail = st.session_state.annotations_df[
+    #     #     st.session_state.hist_annotations_df['datetime'] >= st.session_state.line_chart_data['datetime'].min()]
+    #
+    #     hist_annotation_layer = (
+    #         alt.Chart(st.session_state.annotations_hist_df)
+    #         .mark_text(size=25, text="⬇️", dx=0, dy=0, align="center")
+    #         .encode(x=alt.X("datetime:T", axis=None), y=alt.Y("y:Q"), tooltip=["value"])
+    #     )
+    #
+    #     # annotation_layer = alt.Chart(ping_events).mark_text(
+    #     #     align='left',
+    #     #     baseline='middle',
+    #     #     dx=7  # Adjust text position relative to the ping event
+    #     # ).encode(
+    #     #     x='datetime:T',
+    #     #     y=alt.value(300),  # Adjust vertical position of annotations
+    #     #     text='note:N',
+    #     #     tooltip=['datetime:T', 'note:N']
+    #     # )
+    #
+    #     combined_chart = gsr_chart + hist_annotation_layer
+    #     # st.altair_chart(combined_chart, use_container_width=True)
+    # else:
+    #     # st.altair_chart(gsr_chart, use_container_width=True)
+    #     pass
+
+    st.altair_chart(gsr_chart, use_container_width=True)
